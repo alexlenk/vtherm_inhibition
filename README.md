@@ -155,3 +155,13 @@ pytest -q tests
 ```
 
 The tests use a fake VTherm core that only relies on the `vtherm_api` contract.
+
+### End-to-end tests
+
+`tests_e2e/` runs this plugin together with the **real** Versatile Thermostat core (inhibition support, issue #2087) in the Home Assistant test harness: real VTherms (over_climate, over_switch TPI) with mock underlying devices, real plugin entries, timers, reloads and simulated restarts. The core is taken from a local checkout; its test requirements (`requirements_dev.txt` of the core) must be installed in the same environment:
+
+```bash
+VTHERM_CORE_PATH=/path/to/versatile_thermostat pytest -q tests_e2e
+```
+
+Without `VTHERM_CORE_PATH` (or if it does not point to a `versatile_thermostat` checkout) these modules are skipped.

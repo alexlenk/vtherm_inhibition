@@ -155,3 +155,13 @@ pytest -q tests
 ```
 
 Les tests utilisent un faux cœur VTherm qui ne s'appuie que sur le contrat `vtherm_api`.
+
+### Tests de bout en bout
+
+`tests_e2e/` exécute ce plugin avec le **vrai** cœur Versatile Thermostat (support de l'inhibition, issue #2087) dans le banc de test de Home Assistant : vrais VTherms (over_climate, over_switch TPI) avec des équipements sous-jacents simulés, vraies entrées du plugin, minuteries, rechargements et redémarrages simulés. Le cœur provient d'un dépôt local ; ses dépendances de test (`requirements_dev.txt` du cœur) doivent être installées dans le même environnement :
+
+```bash
+VTHERM_CORE_PATH=/chemin/vers/versatile_thermostat pytest -q tests_e2e
+```
+
+Sans `VTHERM_CORE_PATH` (ou s'il ne désigne pas un dépôt `versatile_thermostat`), ces modules sont ignorés (skipped).
