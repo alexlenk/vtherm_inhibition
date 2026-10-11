@@ -25,6 +25,8 @@ For each configured VTherm, the plugin watches one or more **source** entities a
 
 A source that is missing, `unavailable` or `unknown` is *unavailable*; any other state of an on/off source (neither `on` nor `off`) is also treated as unavailable.
 
+Sources that would feed back into the plugin are refused by the configuration: the VTherm itself, every entity it controls (underlyings, valve opening/closing, calibration and synchronisation entities) and the plugin's own entities (inhibition sensors, bypass switches). A renamed source is followed automatically; a source that no longer exists raises a repair issue (**Settings > System > Repairs**) until it is back or replaced.
+
 ### Aggregation rule (several sources)
 
 Sources are combined with a three-valued **OR**:
@@ -45,12 +47,14 @@ Only confirmed statuses are reported to VTherm; a raw change and a running timer
 
 ### Unavailable grace period
 
-HomeKit bridges, Zigbee or Wi-Fi devices often drop to `unavailable` for a few seconds. When the aggregate becomes `unknown`, the plugin **keeps the last confirmed status** for the *unavailable grace period*; only after it expires is `unknown` reported. If the sources come back before, nothing is reported (same status) or the normal activation/deactivation delay starts from the moment they came back (different status). With a grace period of `0`, `unknown` is reported immediately. Recovery from a reported `unknown` also uses the activation/deactivation delay.
+HomeKit bridges, Zigbee or Wi-Fi devices often drop to `unavailable` for a few seconds. When the aggregate becomes `unknown`, the plugin **keeps the last confirmed status** for the *unavailable grace period*; only after it expires is `unknown` reported. This is a deliberate plugin-side choice for sources with short dropouts (the VTherm contract would otherwise withdraw the VTherm, with a precautionary stop, on every dropout); set the grace period to `0` to report `unknown` at once.
+
+The grace period is measured from the **first** unavailability of an *unavailability episode*. The episode only ends once the aggregate is known again **and** confirmed (for example the source comes back with the confirmed status, or a new status has passed its delay). A source flapping between `unavailable` and another value therefore cannot hold a stale status beyond the grace period, and an entry reload or a restart during the episode does not grant a second grace period (the episode start is saved with the inhibition binary sensor). If the sources come back before, nothing is reported (same status) or the normal activation/deactivation delay starts from the moment they came back (different status). With a grace period of `0`, `unknown` is reported immediately. Recovery from a reported `unknown` also uses the activation/deactivation delay.
 
 ### Startup, restart and reload
 
 - The **first** known aggregate after the plugin starts (Home Assistant start, entry reload) is confirmed **immediately**, without the activation/deactivation delay, so VTherm can resume (or stay withdrawn) without waiting. Delays apply to every later change.
-- If the sources are not available yet at that moment, the status is `unknown`, unless the grace period is not `0` and a status was confirmed before the restart: that **restored** status (saved by the inhibition binary sensor) is then kept for at most the grace period, counted from the plugin start. The first live aggregate replaces it immediately.
+- If the sources are not available yet at that moment, the status is `unknown`, unless the grace period is not `0` and a status was confirmed before the restart: that **restored** status (saved by the inhibition binary sensor) is then kept for at most the grace period, counted from the plugin start, or from the start of the unavailability episode that was already running before the reload/restart. The first live aggregate replaces it immediately.
 - The bypass switch keeps its state across restarts.
 
 ### Bypass
@@ -69,8 +73,10 @@ Any missing or invalid value is treated as `turn_off`. The policy is also applie
 ## Prerequisites
 
 - Home Assistant 2026.7.1 or later.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) with inhibition provider support (issue #2087).
-- `vtherm_api` version `0.6.0` or later (installed automatically).
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ the first release including #2087 (inhibition providers)**. Versatile Thermostat 10.5.1 and older do not support inhibition providers.
+- `vtherm_api` **≥ 0.6.0** (installed automatically).
+
+The plugin cannot work before those versions are released. With an older Versatile Thermostat, the entry fails to set up with an explicit error and a repair issue explains the minimum versions; the VTherms are left untouched. While Versatile Thermostat is not loaded yet, the setup is retried.
 
 ## Installation
 
@@ -133,12 +139,14 @@ Attributes of the binary sensor:
 | `climate_hvac_modes`, `activation_delay`, `deactivation_delay`, `unavailable_grace_period` | Effective settings. |
 | `vtherm_entity_id` | Targeted VTherm. |
 | `provider_attached` | `true` once VTherm has attached the provider. |
+| `unavailable_since` | Start of the current unavailability episode (UTC), `null` outside one. |
+| `missing_sources` | Configured sources that no longer exist. |
 
 ## Lifecycle
 
 - The provider factory is registered in the VTherm API when the first entry is set up and unregistered when the last entry is unloaded. It accepts a VTherm only if an entry targets its unique ID (its entity ID is used only when the VTherm runtime has no unique ID).
 - At Home Assistant startup, VTherm discovers the factory itself (its `async_startup` runs after Home Assistant has started).
-- When an entry is added or re-enabled while Home Assistant is running, the plugin first starts watching its sources, then registers the factory: VTherm attaches the provider at once and gets a confirmed status right away. If the factory was already registered (another entry is loaded), the plugin reloads the targeted VTherm instead so that it attaches the provider.
+- When an entry is added or re-enabled while Home Assistant is running, the plugin first starts watching its sources, then registers the factory: VTherm attaches the provider at once and gets a confirmed status right away. If VTherm has not created a provider for it shortly after (factory already registered for another entry, or a core that does not attach on registration), the plugin reloads the targeted VTherm instead so that it attaches the provider.
 - **Options change**: applied in place to the running entry; the provider stays attached and reports nothing unless its confirmed status really changes. A raw status change caused by the new sources or HVAC modes follows the normal rules (activation/deactivation delay, grace period). A timer already running keeps its start time and its deadline follows the new delay (confirmed at once if already elapsed). A policy-only change reports nothing: VTherm reads the policy when an inhibition starts and keeps the one captured at entry until the exit. Entities reflect the new settings immediately.
 - When an entry is unloaded or reloaded (e.g. **Reload** in the UI), the attached provider reports `unknown` before it detaches: VTherm stays safely withdrawn until a provider confirms `inactive`. When an entry is **deleted or disabled**, the VTherm is reloaded without provider and works as before.
 - Consequence for a VTherm that is **not** inhibited at that moment: with the `turn_off` policy, this `unknown` makes VTherm send its precautionary stop, so the device is turned off briefly and back on once the new provider confirms `inactive` (reload) or once the VTherm is reloaded without provider (deletion, disabling). Saving the options does not do this.

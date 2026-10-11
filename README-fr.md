@@ -25,6 +25,8 @@ Pour chaque VTherm configuré, le plugin observe une ou plusieurs entités **sou
 
 Une source absente, `unavailable` ou `unknown` est *indisponible* ; tout autre état d'une source on/off (ni `on` ni `off`) est aussi considéré comme indisponible.
 
+Les sources qui reboucleraient sur le plugin sont refusées par la configuration : le VTherm lui-même, toutes les entités qu'il commande (sous-jacents, ouverture/fermeture de vanne, entités de calibrage et de synchronisation) et les entités du plugin (capteurs d'inhibition, interrupteurs de contournement). Une source renommée est suivie automatiquement ; une source qui n'existe plus déclenche une réparation (**Paramètres > Système > Réparations**) jusqu'à son retour ou son remplacement.
+
 ### Règle d'agrégation (plusieurs sources)
 
 Les sources sont combinées par un **OU** à trois valeurs :
@@ -45,12 +47,14 @@ Seuls les états confirmés sont transmis à VTherm ; un changement brut ou une 
 
 ### Délai de grâce en cas d'indisponibilité
 
-Les ponts HomeKit et les équipements Zigbee ou Wi-Fi passent souvent à `unavailable` quelques secondes. Lorsque l'agrégat devient `unknown`, le plugin **conserve le dernier état confirmé** pendant le *délai de grâce* ; `unknown` n'est transmis qu'à son expiration. Si les sources reviennent avant, rien n'est transmis (même état) ou le délai d'activation/désactivation normal démarre à leur retour (état différent). Avec un délai de grâce de `0`, `unknown` est transmis immédiatement. Le retour depuis un `unknown` transmis utilise aussi le délai d'activation/désactivation.
+Les ponts HomeKit et les équipements Zigbee ou Wi-Fi passent souvent à `unavailable` quelques secondes. Lorsque l'agrégat devient `unknown`, le plugin **conserve le dernier état confirmé** pendant le *délai de grâce* ; `unknown` n'est transmis qu'à son expiration. C'est un choix délibéré du plugin pour les sources sujettes à de courtes coupures (sinon le contrat VTherm retirerait le VTherm, avec un arrêt de précaution, à chaque coupure) ; un délai de grâce de `0` transmet `unknown` immédiatement. Si les sources reviennent avant, rien n'est transmis (même état) ou le délai d'activation/désactivation normal démarre à leur retour (état différent). Avec un délai de grâce de `0`, `unknown` est transmis immédiatement. Le retour depuis un `unknown` transmis utilise aussi le délai d'activation/désactivation.
+
+Le délai de grâce est mesuré depuis la **première** indisponibilité d'un *épisode d'indisponibilité*. L'épisode ne se termine que lorsque l'agrégat est de nouveau connu **et** confirmé (par exemple la source revient avec l'état confirmé, ou un nouvel état a passé son délai). Une source qui oscille entre `unavailable` et une autre valeur ne peut donc pas maintenir un état périmé au-delà du délai de grâce, et un rechargement de l'entrée ou un redémarrage pendant l'épisode n'accorde pas un second délai (le début de l'épisode est sauvegardé avec le capteur binaire d'inhibition).
 
 ### Démarrage, redémarrage et rechargement
 
 - Le **premier** agrégat connu après le démarrage du plugin (démarrage de Home Assistant, rechargement de l'entrée) est confirmé **immédiatement**, sans délai d'activation/désactivation, afin que VTherm reprenne (ou reste retiré) sans attendre. Les délais s'appliquent à tous les changements suivants.
-- Si les sources ne sont pas encore disponibles à ce moment-là, l'état est `unknown`, sauf si le délai de grâce n'est pas nul et qu'un état avait été confirmé avant le redémarrage : cet état **restauré** (sauvegardé par le capteur binaire d'inhibition) est alors conservé au plus pendant le délai de grâce, compté depuis le démarrage du plugin. Le premier agrégat réel le remplace immédiatement.
+- Si les sources ne sont pas encore disponibles à ce moment-là, l'état est `unknown`, sauf si le délai de grâce n'est pas nul et qu'un état avait été confirmé avant le redémarrage : cet état **restauré** (sauvegardé par le capteur binaire d'inhibition) est alors conservé au plus pendant le délai de grâce, compté depuis le démarrage du plugin, ou depuis le début de l'épisode d'indisponibilité déjà en cours avant le rechargement/redémarrage. Le premier agrégat réel le remplace immédiatement.
 - L'interrupteur de contournement conserve son état après un redémarrage.
 
 ### Contournement
@@ -69,8 +73,10 @@ Une valeur absente ou invalide vaut `turn_off`. La politique s'applique aussi à
 ## Prérequis
 
 - Home Assistant 2026.7.1 ou supérieur.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) avec la prise en charge des fournisseurs d'inhibition (issue #2087).
-- `vtherm_api` version `0.6.0` ou supérieure (installé automatiquement).
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ la première version incluant #2087 (fournisseurs d'inhibition)**. Versatile Thermostat 10.5.1 et antérieures ne prennent pas en charge les fournisseurs d'inhibition.
+- `vtherm_api` **≥ 0.6.0** (installé automatiquement).
+
+Le plugin ne peut pas fonctionner avant la publication de ces versions. Avec un Versatile Thermostat plus ancien, l'entrée échoue avec une erreur explicite et une réparation indique les versions minimales ; les VTherm ne sont pas touchés. Tant que Versatile Thermostat n'est pas chargé, la mise en place est retentée.
 
 ## Installation
 
@@ -133,12 +139,14 @@ Attributs du capteur binaire :
 | `climate_hvac_modes`, `activation_delay`, `deactivation_delay`, `unavailable_grace_period` | Réglages effectifs. |
 | `vtherm_entity_id` | VTherm ciblé. |
 | `provider_attached` | `true` dès que VTherm a rattaché le fournisseur. |
+| `unavailable_since` | Début de l'épisode d'indisponibilité en cours (UTC), `null` hors épisode. |
+| `missing_sources` | Sources configurées qui n'existent plus. |
 
 ## Cycle de vie
 
 - La fabrique de fournisseurs est enregistrée dans l'API VTherm à la mise en place de la première entrée et retirée au déchargement de la dernière. Elle n'accepte un VTherm que si une entrée cible son identifiant unique (l'entity ID n'est utilisé que si le VTherm n'expose pas d'identifiant unique).
 - Au démarrage de Home Assistant, VTherm découvre lui-même la fabrique (son `async_startup` s'exécute une fois Home Assistant démarré).
-- Lorsqu'une entrée est ajoutée ou réactivée alors que Home Assistant tourne, le plugin commence par surveiller ses sources, puis enregistre la fabrique : VTherm rattache aussitôt le fournisseur et obtient immédiatement un statut confirmé. Si la fabrique était déjà enregistrée (une autre entrée est chargée), le plugin recharge plutôt le VTherm ciblé pour qu'il rattache le fournisseur.
+- Lorsqu'une entrée est ajoutée ou réactivée alors que Home Assistant tourne, le plugin commence par surveiller ses sources, puis enregistre la fabrique : VTherm rattache aussitôt le fournisseur et obtient immédiatement un statut confirmé. Si VTherm n'a pas créé de fournisseur peu après (fabrique déjà enregistrée pour une autre entrée, ou cœur qui ne rattache pas à l'enregistrement), le plugin recharge plutôt le VTherm ciblé pour qu'il rattache le fournisseur.
 - **Modification des options** : appliquée à chaud à l'entrée en cours ; le fournisseur reste rattaché et ne transmet rien tant que son état confirmé ne change pas réellement. Un changement d'état brut dû aux nouvelles sources ou aux nouveaux modes HVAC suit les règles normales (délai d'activation/désactivation, délai de grâce). Une temporisation déjà en cours garde son heure de départ et son échéance suit le nouveau délai (confirmation immédiate s'il est déjà écoulé). Un changement de la seule politique ne transmet rien : VTherm lit la politique au début d'une inhibition et garde celle capturée à l'entrée jusqu'à la sortie. Les entités reflètent immédiatement les nouveaux réglages.
 - Au déchargement ou au rechargement d'une entrée (par exemple **Recharger** dans l'interface), le fournisseur rattaché transmet `unknown` avant de se détacher : VTherm reste retiré par prudence jusqu'à ce qu'un fournisseur confirme `inactive`. Lorsqu'une entrée est **supprimée ou désactivée**, le VTherm est rechargé sans fournisseur et fonctionne comme avant.
 - Conséquence pour un VTherm qui n'est **pas** inhibé à ce moment : avec la politique `turn_off`, ce `unknown` fait envoyer par VTherm son arrêt de précaution ; l'équipement est donc brièvement éteint puis rallumé dès que le nouveau fournisseur confirme `inactive` (rechargement) ou dès que le VTherm est rechargé sans fournisseur (suppression, désactivation). L'enregistrement des options ne le fait pas.
