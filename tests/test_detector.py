@@ -570,3 +570,58 @@ async def test_reconfigure_before_start(hass: HomeAssistant) -> None:
     detector.async_reconfigure(new)
     assert detector.config is new
     assert detector.status is UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# Grace period measured per unavailability episode (review item 6)
+# ---------------------------------------------------------------------------
+async def test_grace_not_restarted_by_flapping(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """unavailable -> other value -> unavailable: the grace runs from the first dropout."""
+    hass.states.async_set(AC, "off")
+    await setup_plugin([AC], grace=120, activation=60)
+    provider, rec = await attach()
+
+    hass.states.async_set(AC, "unavailable")
+    await advance(50)
+    hass.states.async_set(AC, "heat")  # raw ACTIVE, not confirmed: episode continues
+    await advance(10)
+    hass.states.async_set(AC, "unavailable")
+    await advance(59)
+    assert provider.status is INACTIVE
+    await advance(1)
+    assert provider.status is UNKNOWN
+    assert rec.statuses == [UNKNOWN]
+
+
+async def test_grace_episode_ends_when_confirmed_again(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """Back to the confirmed status: the next dropout gets a full grace period."""
+    hass.states.async_set(AC, "off")
+    entry = await setup_plugin([AC], grace=120)
+    provider, rec = await attach()
+    hass.states.async_set(AC, "unavailable")
+    await advance(30)
+    hass.states.async_set(AC, "off")
+    await advance(70)
+    assert entry.runtime_data.unavailable_since is None
+    hass.states.async_set(AC, "unavailable")
+    await advance(119)
+    assert provider.status is INACTIVE
+    await advance(1)
+    assert provider.status is UNKNOWN
+
+
+async def test_grace_episode_survives_entry_reload(hass: HomeAssistant, setup_plugin, advance) -> None:
+    """An entry reload during a dropout does not grant a second grace period."""
+    hass.states.async_set(AC, "off")
+    entry = await setup_plugin([AC], grace=120)
+    hass.states.async_set(AC, "unavailable")
+    await advance(60)
+    assert entry.runtime_data.status is INACTIVE
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.status is INACTIVE
+    await advance(59)
+    assert entry.runtime_data.status is INACTIVE
+    await advance(1)
+    assert entry.runtime_data.status is UNKNOWN

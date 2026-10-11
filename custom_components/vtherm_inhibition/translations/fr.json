@@ -32,7 +32,8 @@
     "error": {
       "not_a_vtherm": "Cette entité n'est pas un Versatile Thermostat.",
       "no_source": "Sélectionnez au moins une source.",
-      "source_is_target": "Le VTherm ne peut pas être sa propre source."
+      "source_is_target": "Le VTherm ne peut pas être sa propre source.",
+      "source_feeds_back": "Une source ne peut pas être le VTherm, un équipement qu'il commande ou une entité d'inhibition."
     },
     "abort": {
       "already_configured": "Ce VTherm a déjà une configuration d'inhibition."
@@ -63,7 +64,8 @@
     },
     "error": {
       "no_source": "Sélectionnez au moins une source.",
-      "source_is_target": "Le VTherm ne peut pas être sa propre source."
+      "source_is_target": "Le VTherm ne peut pas être sa propre source.",
+      "source_feeds_back": "Une source ne peut pas être le VTherm, un équipement qu'il commande ou une entité d'inhibition."
     }
   },
   "selector": {
@@ -94,6 +96,24 @@
       "inhibition_bypass": {
         "name": "Contournement de l'inhibition"
       }
+    }
+  },
+  "exceptions": {
+    "core_not_ready": {
+      "message": "Versatile Thermostat n'est pas encore chargé."
+    },
+    "core_without_inhibition": {
+      "message": "Le Versatile Thermostat installé ne prend pas en charge les fournisseurs d'inhibition. Mettez-le à jour vers une version qui les inclut (issue #2087)."
+    }
+  },
+  "issues": {
+    "core_without_inhibition": {
+      "title": "Versatile Thermostat sans prise en charge de l'inhibition",
+      "description": "VTherm Inhibition nécessite Versatile Thermostat avec la prise en charge des fournisseurs d'inhibition (première version incluant l'issue #2087) et vtherm_api 0.6.0 ou supérieur. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
+    },
+    "missing_sources": {
+      "title": "Sources d'inhibition manquantes",
+      "description": "L'inhibition de {entry} utilise des sources qui n'existent plus : {sources}. Tant qu'une source manque, l'état devient inconnu après le délai de grâce. Modifiez les options de l'entrée pour choisir d'autres sources."
     }
   }
 }

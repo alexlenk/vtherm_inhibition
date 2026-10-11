@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 from vtherm_api import InterfaceThermostatRuntime, VThermAPI
+from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
+from vtherm_api.const import VTHERM_API_NAME
 from vtherm_api.log_collector import get_vtherm_logger
 
 from .const import DATA_DETECTORS, DATA_FACTORY, DOMAIN, PROVIDER_NAME
@@ -46,7 +48,34 @@ class InhibitionProviderFactory:
         detector = self._detector_for(thermostat)
         if detector is None:
             raise ValueError(f"No {DOMAIN} configuration for VTherm {getattr(thermostat, 'unique_id', None)}")
+        detector.created_providers += 1
         return VThermInhibitionProvider(detector, thermostat)
+
+
+def get_core_api(hass: HomeAssistant) -> VThermAPI | None:
+    """Return the VTherm API created by the core, without ever creating one.
+
+    ``VThermAPI.get_vtherm_api(hass)`` creates a bare API when the core has
+    none (e.g. after its last entry was unloaded), which breaks the core later.
+    """
+    return hass.data.get(VTHERM_API_DOMAIN, {}).get(VTHERM_API_NAME)
+
+
+def core_supports_inhibition(api: object) -> bool:
+    """Return True when the loaded core implements inhibition providers (#2087).
+
+    ``vtherm_api`` >= 0.6.0 is not enough: an older core subclasses it and
+    inherits the registry, but never queries it. A core with inhibition support
+    overrides ``register_inhibition_provider_factory`` and
+    ``unregister_inhibition_provider_factory`` to attach/detach the providers
+    of its running VTherms (documented "late plugin" behaviour); that override
+    is the check.
+    """
+    for method in ("register_inhibition_provider_factory", "unregister_inhibition_provider_factory"):
+        implementation = getattr(type(api), method, None)
+        if implementation is None or implementation is getattr(VThermAPI, method, None):
+            return False
+    return hasattr(api, "get_inhibition_provider_factories")
 
 
 def async_register_factory(hass: HomeAssistant) -> bool:
@@ -56,9 +85,9 @@ def async_register_factory(hass: HomeAssistant) -> bool:
     if factory is None:
         factory = InhibitionProviderFactory(hass)
         data[DATA_FACTORY] = factory
-    api = VThermAPI.get_vtherm_api(hass)
-    if api is None:
-        _LOGGER.warning("Unable to register the inhibition provider factory: VThermAPI is unavailable")
+    api = get_core_api(hass)
+    if api is None or not core_supports_inhibition(api):
+        _LOGGER.warning("Unable to register the inhibition provider factory: no Versatile Thermostat core with inhibition support")
         return False
     existing = api.get_inhibition_provider_factory(PROVIDER_NAME)
     if existing is factory:
@@ -78,6 +107,6 @@ def async_unregister_factory(hass: HomeAssistant) -> None:
     """Remove the factory from the VTherm API registry."""
     data = hass.data.get(DOMAIN, {})
     factory = data.pop(DATA_FACTORY, None)
-    api = VThermAPI.get_vtherm_api(hass)
+    api = get_core_api(hass)
     if api is not None and factory is not None and api.get_inhibition_provider_factory(PROVIDER_NAME) is factory:
         api.unregister_inhibition_provider_factory(PROVIDER_NAME)

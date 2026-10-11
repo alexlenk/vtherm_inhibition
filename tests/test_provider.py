@@ -190,9 +190,11 @@ async def test_no_transition_before_start(hass: HomeAssistant, setup_plugin, the
 
 
 async def test_refresh_never_awaits_callbacks(hass: HomeAssistant, setup_plugin, attach) -> None:
-    """A core holding its own lock during refresh cannot deadlock."""
+    """A transition found by async_refresh_state (missed state event) is not
+    awaited by the refresh: a core holding its own lock cannot deadlock."""
     hass.states.async_set(HEATER, "on")
     entry = await setup_plugin([HEATER])
+    detector = entry.runtime_data
     provider, _ = await attach()
     core_lock = asyncio.Lock()
     received = []
@@ -202,8 +204,13 @@ async def test_refresh_never_awaits_callbacks(hass: HomeAssistant, setup_plugin,
             received.append(transition.new_status)
 
     provider.register_transition_callback(core_callback)
+    # Simulate a missed state event: stop following the source, change it.
+    detector._unsubscribe()  # pylint: disable=protected-access
+    hass.states.async_set(HEATER, "off")
+    await hass.async_block_till_done()
+    assert provider.status is ACTIVE
+
     async with core_lock:
-        entry.runtime_data.set_bypass(True)
         status = await asyncio.wait_for(provider.async_refresh_state(), 1)
         assert status is INACTIVE
         assert received == []

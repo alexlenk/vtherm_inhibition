@@ -7,7 +7,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
@@ -42,12 +42,66 @@ def _seconds_selector() -> selector.NumberSelector:
     )
 
 
-def settings_schema(defaults: dict[str, Any]) -> vol.Schema:
+#: Keys of a Versatile Thermostat config entry holding entities it commands
+#: (underlyings, valve regulation, calibration/sync). Literal names: the plugin
+#: never imports the core; unknown keys are simply absent.
+VTHERM_COMMANDED_ENTITY_KEYS = (
+    "underlying_entity_ids",
+    "heater_entity_id",
+    "heater_entity2_id",
+    "heater_entity3_id",
+    "heater_entity4_id",
+    "climate_entity_id",
+    "climate_entity2_id",
+    "climate_entity3_id",
+    "climate_entity4_id",
+    "valve_entity_id",
+    "valve_entity2_id",
+    "valve_entity3_id",
+    "valve_entity4_id",
+    "offset_calibration_entity_ids",
+    "opening_degree_entity_ids",
+    "closing_degree_entity_ids",
+    "sync_entity_ids",
+)
+
+
+def _entity_ids(value: Any) -> set[str]:
+    if isinstance(value, str):
+        return {value} if "." in value else set()
+    if isinstance(value, (list, tuple, set)):
+        return {item for item in value if isinstance(item, str) and "." in item}
+    return set()
+
+
+def forbidden_sources(hass: HomeAssistant, vtherm_entity_id: str) -> set[str]:
+    """Entities that would feed back into the inhibition if used as sources.
+
+    The VTherm itself, every entity it commands (read from its config entry
+    data and options), and every entity of this plugin (its own inhibition
+    binary sensors and bypass switches).
+    """
+    forbidden = {vtherm_entity_id} if vtherm_entity_id else set()
+    registry = er.async_get(hass)
+    vtherm = registry.async_get(vtherm_entity_id) if vtherm_entity_id else None
+    if vtherm is not None and vtherm.config_entry_id:
+        vt_entry = hass.config_entries.async_get_entry(vtherm.config_entry_id)
+        if vt_entry is not None:
+            config = {**vt_entry.data, **vt_entry.options}
+            for key in VTHERM_COMMANDED_ENTITY_KEYS:
+                forbidden |= _entity_ids(config.get(key))
+    forbidden |= {entity.entity_id for entity in registry.entities.values() if entity.platform == DOMAIN}
+    return forbidden
+
+
+def settings_schema(defaults: dict[str, Any], exclude: set[str] | None = None) -> vol.Schema:
     """Schema shared by the creation step and the options flow."""
     return vol.Schema(
         {
             vol.Required(CONF_SOURCE_ENTITIES, default=defaults[CONF_SOURCE_ENTITIES]): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=list(SOURCE_DOMAINS), multiple=True)
+                selector.EntitySelectorConfig(
+                    domain=list(SOURCE_DOMAINS), multiple=True, exclude_entities=sorted(exclude or ())
+                )
             ),
             vol.Optional(CONF_CLIMATE_HVAC_MODES, default=defaults[CONF_CLIMATE_HVAC_MODES]): selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -85,12 +139,14 @@ def _clean_settings(user_input: dict[str, Any]) -> dict[str, Any]:
     return settings
 
 
-def _validate_sources(user_input: dict[str, Any], vtherm_entity_id: str) -> dict[str, str]:
+def _validate_sources(hass: HomeAssistant, user_input: dict[str, Any], vtherm_entity_id: str) -> dict[str, str]:
     sources = user_input.get(CONF_SOURCE_ENTITIES) or []
     if not sources:
         return {CONF_SOURCE_ENTITIES: "no_source"}
     if vtherm_entity_id in sources:
         return {CONF_SOURCE_ENTITIES: "source_is_target"}
+    if forbidden_sources(hass, vtherm_entity_id).intersection(sources):
+        return {CONF_SOURCE_ENTITIES: "source_feeds_back"}
     return {}
 
 
@@ -137,7 +193,7 @@ class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         defaults = default_options()
         if user_input is not None:
-            errors = _validate_sources(user_input, self._vtherm_entity_id)
+            errors = _validate_sources(self.hass, user_input, self._vtherm_entity_id)
             if not errors:
                 data = {
                     CONF_VTHERM_ENTITY_ID: self._vtherm_entity_id,
@@ -150,7 +206,7 @@ class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="settings",
-            data_schema=settings_schema(defaults),
+            data_schema=settings_schema(defaults, forbidden_sources(self.hass, self._vtherm_entity_id)),
             errors=errors,
             description_placeholders={"vtherm": self._vtherm_entity_id},
         )
@@ -173,14 +229,14 @@ class InhibitionOptionsFlow(OptionsFlow):
         defaults.update({key: value for key, value in entry.data.items() if key in OPTION_KEYS})
         defaults.update({key: value for key, value in entry.options.items() if key in OPTION_KEYS})
         if user_input is not None:
-            errors = _validate_sources(user_input, entry.data.get(CONF_VTHERM_ENTITY_ID, ""))
+            errors = _validate_sources(self.hass, user_input, entry.data.get(CONF_VTHERM_ENTITY_ID, ""))
             if not errors:
                 return self.async_create_entry(title="", data=_clean_settings(user_input))
             defaults.update(user_input)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=settings_schema(defaults),
+            data_schema=settings_schema(defaults, forbidden_sources(self.hass, entry.data.get(CONF_VTHERM_ENTITY_ID, ""))),
             errors=errors,
             description_placeholders={"vtherm": entry.data.get(CONF_VTHERM_ENTITY_ID, "")},
         )

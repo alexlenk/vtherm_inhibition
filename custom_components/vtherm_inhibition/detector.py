@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HassJob, HomeAssistant, State, callback
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_entity_registry_updated_event,
+    async_track_state_change_event,
+)
 from homeassistant.util import dt as dt_util
 from vtherm_api import InhibitionStatus, InhibitionStopPolicy
 from vtherm_api.log_collector import get_vtherm_logger
@@ -100,6 +105,13 @@ class InhibitionDetector:
         self._timer_started: datetime | None = None
         self._timer_job = HassJob(self._async_timer_fired, f"{name} inhibition timer", cancel_on_shutdown=True)
         self._unsub_sources: CALLBACK_TYPE | None = None
+        self._unsub_registry: CALLBACK_TYPE | None = None
+        # Start of the current unavailability episode (see _update_episode).
+        self._unavailable_since: datetime | None = None
+        self._missing_sources: tuple[str, ...] = ()
+        self.created_providers = 0
+        #: Called with (old_entity_id, new_entity_id) when a source is renamed.
+        self.rename_handler: Callable[[str, str], None] | None = None
         self._providers: list[VThermInhibitionProvider] = []
         self._update_listeners: list[Callable[[], None]] = []
         self._last_change: datetime | None = None
@@ -161,6 +173,16 @@ class InhibitionDetector:
         return [self._sources[entity_id] for entity_id in self._config.source_entities if entity_id in self._sources]
 
     @property
+    def missing_sources(self) -> tuple[str, ...]:
+        """Configured sources that exist neither in the entity registry nor as a state."""
+        return self._missing_sources
+
+    @property
+    def unavailable_since(self) -> datetime | None:
+        """Start of the current unavailability episode, if any."""
+        return self._unavailable_since
+
+    @property
     def providers(self) -> list[VThermInhibitionProvider]:
         """Return the providers currently attached to this detector."""
         return list(self._providers)
@@ -169,19 +191,24 @@ class InhibitionDetector:
     # Lifecycle
     # ------------------------------------------------------------------
     @callback
-    def restore_status(self, status: str | None) -> None:
+    def restore_status(self, status: str | None, unavailable_since: datetime | None = None) -> None:
         """Restore the last confirmed status from before a restart or reload.
 
-        Only used when the unavailable grace period is not zero: the restored
-        status is then kept for at most the grace period while the sources
-        are not available yet. Ignored once the detector has started.
+        Deliberate plugin-side choice for sources with short dropouts: instead
+        of reporting UNKNOWN at once, the restored status is kept for at most
+        the grace period while the sources are not available yet, then
+        UNKNOWN is reported. Only used when the grace period is not zero.
+        ``unavailable_since`` continues an unavailability episode that was
+        running before the reload/restart, so the grace is not granted twice.
+        Ignored once the detector has started.
         """
         if self._started or self._config.unavailable_grace_period <= 0:
             return
         if status in (InhibitionStatus.ACTIVE, InhibitionStatus.INACTIVE):
             self._restored_status = InhibitionStatus(status)
             self._status = self._restored_status
-            _LOGGER.debug("%s - restored confirmed status %s", self, status)
+            self._unavailable_since = unavailable_since
+            _LOGGER.debug("%s - restored confirmed status %s (unavailable since %s)", self, status, unavailable_since)
 
     @callback
     def restore_bypass(self, bypass: bool) -> None:
@@ -204,14 +231,31 @@ class InhibitionDetector:
         self._evaluate()
 
     @callback
+    def _unsubscribe(self) -> None:
+        for unsub in (self._unsub_sources, self._unsub_registry):
+            if unsub is not None:
+                unsub()
+        self._unsub_sources = None
+        self._unsub_registry = None
+
+    @callback
     def _subscribe(self) -> None:
-        if self._unsub_sources is not None:
-            self._unsub_sources()
-            self._unsub_sources = None
+        self._unsubscribe()
         if self._config.source_entities:
-            self._unsub_sources = async_track_state_change_event(
-                self._hass, list(self._config.source_entities), self._async_source_changed
+            sources = list(self._config.source_entities)
+            self._unsub_sources = async_track_state_change_event(self._hass, sources, self._async_source_changed)
+            self._unsub_registry = async_track_entity_registry_updated_event(
+                self._hass, sources, self._async_source_registry_updated
             )
+
+    @callback
+    def _async_source_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        """Follow renamed sources; re-evaluate on removal (missing source)."""
+        data = event.data
+        if data["action"] == "update" and "old_entity_id" in data and self.rename_handler is not None:
+            self.rename_handler(data["old_entity_id"], data["entity_id"])
+            return
+        self._evaluate()
 
     @callback
     def async_reconfigure(self, config: InhibitionConfig) -> None:
@@ -277,10 +321,9 @@ class InhibitionDetector:
             provider.stop_listening()
         self._providers.clear()
         self._cancel_timer()
-        if self._unsub_sources is not None:
-            self._unsub_sources()
-            self._unsub_sources = None
+        self._unsubscribe()
         self._started = False
+        self._unavailable_since = None
         self._status = InhibitionStatus.UNKNOWN
         self._raw = InhibitionStatus.UNKNOWN
         self._live = False
@@ -346,11 +389,16 @@ class InhibitionDetector:
     # ------------------------------------------------------------------
     def _read_sources(self) -> list[str]:
         contributions: list[str] = []
+        missing: list[str] = []
+        registry = er.async_get(self._hass)
         for entity_id in self._config.source_entities:
             state = self._hass.states.get(entity_id)
             contribution = source_contribution(state, self._config.climate_hvac_modes)
             self._sources[entity_id] = SourceState(entity_id, state.state if state else None, contribution)
             contributions.append(contribution)
+            if state is None and registry.async_get(entity_id) is None:
+                missing.append(entity_id)
+        self._missing_sources = tuple(missing)
         return contributions
 
     @callback
@@ -369,6 +417,10 @@ class InhibitionDetector:
            activation delay for ``ACTIVE``, deactivation delay for
            ``INACTIVE``, unavailable grace period for ``UNKNOWN``. A zero
            delay confirms immediately.
+        4. The grace period is measured from the first unavailability of an
+           unavailability episode, which only ends once the raw status is
+           known again and confirmed (so a source flapping between
+           unavailable and another value cannot hold a stale status forever).
         """
         contributions = self._read_sources()
 
@@ -380,6 +432,8 @@ class InhibitionDetector:
             return
 
         new_raw = aggregate(contributions)
+        if new_raw is InhibitionStatus.UNKNOWN and self._unavailable_since is None:
+            self._unavailable_since = dt_util.utcnow()
 
         if not self._live:
             if new_raw is not InhibitionStatus.UNKNOWN:
@@ -403,10 +457,16 @@ class InhibitionDetector:
         self._cancel_timer()
         if new_raw == self._status:
             _LOGGER.debug("%s - raw status back to confirmed %s, timer cancelled", self, new_raw)
+            self._end_episode_if_confirmed()
             self._publish()
             return
 
         self._schedule(new_raw, self._delay_for(new_raw))
+
+    @callback
+    def _end_episode_if_confirmed(self) -> None:
+        if self._raw is not InhibitionStatus.UNKNOWN and self._raw == self._status:
+            self._unavailable_since = None
 
     def _delay_for(self, status: InhibitionStatus) -> int:
         if status is InhibitionStatus.ACTIVE:
@@ -417,14 +477,18 @@ class InhibitionDetector:
 
     @callback
     def _schedule(self, target: InhibitionStatus, delay: int) -> None:
-        if delay <= 0:
+        now = dt_util.utcnow()
+        # The grace period runs from the start of the unavailability episode.
+        start = (self._unavailable_since or now) if target is InhibitionStatus.UNKNOWN else now
+        deadline = start + timedelta(seconds=delay)
+        if deadline <= now:
             self._confirm(target)
             return
         self._timer_target = target
-        self._timer_started = dt_util.utcnow()
-        self._timer_until = self._timer_started + timedelta(seconds=delay)
-        self._timer_cancel = async_call_later(self._hass, delay, self._timer_job)
-        _LOGGER.debug("%s - %s pending for %ss", self, target, delay)
+        self._timer_started = start
+        self._timer_until = deadline
+        self._timer_cancel = async_call_later(self._hass, (deadline - now).total_seconds(), self._timer_job)
+        _LOGGER.debug("%s - %s pending until %s", self, target, deadline)
         self._publish()
 
     @callback
@@ -452,6 +516,7 @@ class InhibitionDetector:
         """Publish a confirmed status to the attached providers."""
         old_status = self._status
         self._status = new_status
+        self._end_episode_if_confirmed()
         if new_status != old_status:
             self._last_change = dt_util.utcnow()
             _LOGGER.info("%s - confirmed status %s -> %s", self, old_status, new_status)
@@ -477,6 +542,8 @@ class InhibitionDetector:
             "pending_status": str(self._timer_target) if self._timer_target else None,
             "pending_until": self._timer_until.isoformat() if self._timer_until else None,
             "last_change": self._last_change.isoformat() if self._last_change else None,
+            "unavailable_since": self._unavailable_since.isoformat() if self._unavailable_since else None,
+            "missing_sources": list(self._missing_sources),
             "sources": {
                 source.entity_id: {"state": source.state, "contribution": source.contribution}
                 for source in self.source_states

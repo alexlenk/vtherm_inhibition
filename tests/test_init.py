@@ -403,3 +403,184 @@ async def test_provider_attached_attribute(hass: HomeAssistant, vtherm, setup_pl
     hass.states.async_set(HEATER, "off")
     await setup_plugin([HEATER])
     assert hass.states.get("binary_sensor.bathroom_inhibition").attributes["provider_attached"] is True
+
+
+# ---------------------------------------------------------------------------
+# Core without inhibition support / not ready (review item 2)
+# ---------------------------------------------------------------------------
+def _install_api(hass: HomeAssistant, api_class: type[VThermAPI] | None) -> None:
+    from vtherm_api.const import DOMAIN as API_DOMAIN, VTHERM_API_NAME
+
+    VThermAPI.reset_vtherm_api()
+    hass.data.setdefault(API_DOMAIN, {}).pop(VTHERM_API_NAME, None)
+    if api_class is not None:
+        api_class.get_vtherm_api(hass)
+
+
+async def test_core_not_ready_retries_without_creating_api(hass: HomeAssistant, vt_module) -> None:
+    """No core API yet: setup is retried and no bare VThermAPI is created."""
+    from vtherm_api.const import DOMAIN as API_DOMAIN, VTHERM_API_NAME
+
+    _install_api(hass, None)
+    hass.states.async_set(HEATER, "off")
+    entry = plugin_entry([HEATER])
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert hass.data.get(API_DOMAIN, {}).get(VTHERM_API_NAME) is None
+
+
+async def test_core_without_inhibition_support(hass: HomeAssistant, vtherm, fake_core, caplog) -> None:
+    """A core that does not override the registration (no #2087 support):
+    setup error, repair issue, no VTherm reload, no misleading log."""
+    from homeassistant.helpers import issue_registry as ir
+
+    class OldCoreAPI(VThermAPI):
+        """Released core: subclasses vtherm_api but has no inhibition runtime."""
+
+    _install_api(hass, OldCoreAPI)
+    hass.states.async_set(HEATER, "off")
+    entry = plugin_entry([HEATER])
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "core_without_inhibition") is not None
+    assert fake_core.attach_count == 0
+    assert "Reloading VTherm" not in caplog.text
+
+    # Once the core is updated, the setup succeeds and the issue disappears.
+    from .conftest import FakeCoreAPI
+
+    _install_api(hass, FakeCoreAPI)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "core_without_inhibition") is None
+    assert fake_core.attach_count == 1
+
+
+async def test_unregister_does_not_create_api(hass: HomeAssistant, setup_plugin) -> None:
+    """Unloading after the core dropped its API creates no bare API."""
+    from vtherm_api.const import DOMAIN as API_DOMAIN, VTHERM_API_NAME
+
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER])
+    hass.data[API_DOMAIN].pop(VTHERM_API_NAME)
+    VThermAPI._hass = None  # pylint: disable=protected-access
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert hass.data.get(API_DOMAIN, {}).get(VTHERM_API_NAME) is None
+
+
+def test_core_supports_inhibition() -> None:
+    """Both registration methods must be overridden by the core."""
+    from custom_components.vtherm_inhibition.factory import core_supports_inhibition
+
+    from .conftest import FakeCoreAPI
+
+    class HalfAPI(VThermAPI):
+        def register_inhibition_provider_factory(self, factory) -> None:
+            super().register_inhibition_provider_factory(factory)
+
+    assert core_supports_inhibition(FakeCoreAPI()) is True
+    assert core_supports_inhibition(VThermAPI()) is False
+    assert core_supports_inhibition(HalfAPI()) is False
+    assert core_supports_inhibition(object()) is False
+
+
+# ---------------------------------------------------------------------------
+# Renamed / missing sources (review item 4)
+# ---------------------------------------------------------------------------
+async def test_renamed_source_is_followed(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
+    """A renamed source is replaced in the options and tracked under its new ID."""
+    registry = er.async_get(hass)
+    registry.async_get_or_create("input_boolean", "input_boolean", "heater", suggested_object_id="heater")
+    hass.states.async_set(HEATER, "off")
+    hass.states.async_set("binary_sensor.other", "off")
+    # With a grace period (default 300 s), the rename blip is invisible.
+    entry = await setup_plugin([HEATER, "binary_sensor.other"], grace=60)
+    provider = fake_core.providers[VT_UNIQUE_ID]
+
+    registry.async_update_entity(HEATER, new_entity_id="input_boolean.bath_heater")
+    hass.states.async_remove(HEATER)
+    hass.states.async_set("input_boolean.bath_heater", "off")
+    await hass.async_block_till_done()
+
+    assert entry.options[CONF_SOURCE_ENTITIES] == ["input_boolean.bath_heater", "binary_sensor.other"]
+    assert entry.runtime_data.config.source_entities == ("input_boolean.bath_heater", "binary_sensor.other")
+    assert fake_core.providers[VT_UNIQUE_ID] is provider
+    hass.states.async_set("input_boolean.bath_heater", "on")
+    await hass.async_block_till_done()
+    assert provider.status is ACTIVE
+    assert [t.new_status for t in fake_core.transitions] == [ACTIVE]
+
+
+async def test_missing_source_repair_issue(hass: HomeAssistant, setup_plugin) -> None:
+    """A source that exists neither in the registry nor as a state raises a repair issue."""
+    from homeassistant.helpers import issue_registry as ir
+
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER, "binary_sensor.gone"])
+    issue_id = f"missing_sources_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_placeholders["sources"] == "binary_sensor.gone"
+    assert entry.runtime_data.missing_sources == ("binary_sensor.gone",)
+
+    hass.states.async_set("binary_sensor.gone", "off")
+    await hass.async_block_till_done()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+    # Removed from the registry and the state machine: the issue comes back.
+    registry = er.async_get(hass)
+    registry.async_get_or_create("input_boolean", "input_boolean", "heater", suggested_object_id="heater")
+    await hass.async_block_till_done()
+    registry.async_remove(HEATER)
+    hass.states.async_remove(HEATER)
+    await hass.async_block_till_done()
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_placeholders["sources"] == HEATER
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics and fallback device (review item 10)
+# ---------------------------------------------------------------------------
+async def test_diagnostics(hass: HomeAssistant, vtherm, setup_plugin) -> None:
+    """Config entry diagnostics expose the config and the detector state."""
+    from custom_components.vtherm_inhibition.diagnostics import async_get_config_entry_diagnostics
+
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["entry"]["data"][CONF_SOURCE_ENTITIES] == [HEATER]
+    assert diag["detector"]["status"] == "active"
+    assert diag["detector"]["sources"][HEATER]["contribution"] == "active"
+    assert diag["attached_providers"] == 1
+
+
+async def test_fallback_device_removed_when_vtherm_device_exists(hass: HomeAssistant, setup_plugin) -> None:
+    """The plugin's own device is removed once the VTherm has a device."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER])
+    devices = dr.async_get(hass)
+    assert devices.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id) is not None
+
+    vt_entry = MockConfigEntry(domain=VT_DOMAIN, unique_id=VT_UNIQUE_ID)
+    vt_entry.add_to_hass(hass)
+    device = devices.async_get_or_create(config_entry_id=vt_entry.entry_id, identifiers={(VT_DOMAIN, VT_UNIQUE_ID)})
+    er.async_get(hass).async_get_or_create(
+        "climate", VT_DOMAIN, VT_UNIQUE_ID, suggested_object_id="bathroom", config_entry=vt_entry, device_id=device.id
+    )
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert devices.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id) is None
+    sensor = er.async_get(hass).async_get("binary_sensor.bathroom_inhibition")
+    assert sensor is not None
+    assert sensor.device_id == device.id

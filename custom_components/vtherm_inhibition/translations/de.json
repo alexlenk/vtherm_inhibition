@@ -32,7 +32,8 @@
     "error": {
       "not_a_vtherm": "Diese Entität ist kein Versatile Thermostat.",
       "no_source": "Wähle mindestens eine Quelle.",
-      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein."
+      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein.",
+      "source_feeds_back": "Eine Quelle kann nicht der VTherm, ein von ihm gesteuertes Gerät oder eine Sperr-Entität sein."
     },
     "abort": {
       "already_configured": "Für diesen VTherm gibt es bereits eine Sperre."
@@ -63,7 +64,8 @@
     },
     "error": {
       "no_source": "Wähle mindestens eine Quelle.",
-      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein."
+      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein.",
+      "source_feeds_back": "Eine Quelle kann nicht der VTherm, ein von ihm gesteuertes Gerät oder eine Sperr-Entität sein."
     }
   },
   "selector": {
@@ -94,6 +96,24 @@
       "inhibition_bypass": {
         "name": "Sperre umgehen"
       }
+    }
+  },
+  "exceptions": {
+    "core_not_ready": {
+      "message": "Versatile Thermostat ist noch nicht geladen."
+    },
+    "core_without_inhibition": {
+      "message": "Das installierte Versatile Thermostat unterstützt keine Sperr-Provider. Aktualisiere es auf eine Version mit Sperr-Providern (Issue #2087)."
+    }
+  },
+  "issues": {
+    "core_without_inhibition": {
+      "title": "Versatile Thermostat ohne Sperr-Unterstützung",
+      "description": "VTherm-Sperre benötigt Versatile Thermostat mit Unterstützung für Sperr-Provider (erste Version mit Issue #2087) und vtherm_api 0.6.0 oder neuer. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
+    },
+    "missing_sources": {
+      "title": "Fehlende Sperrquellen",
+      "description": "Die Sperre von {entry} nutzt Quellen, die nicht mehr existieren: {sources}. Solange eine Quelle fehlt, wird der Status nach der Toleranzzeit unbekannt. Wähle in den Optionen des Eintrags andere Quellen."
     }
   }
 }

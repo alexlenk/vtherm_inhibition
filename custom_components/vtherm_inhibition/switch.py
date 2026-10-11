@@ -13,6 +13,8 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from . import InhibitionConfigEntry
 from .entity import InhibitionEntity
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -27,7 +29,6 @@ class InhibitionBypassSwitch(InhibitionEntity, SwitchEntity, RestoreEntity):
     """Ignore every source while on (state restored after a restart)."""
 
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_icon = "mdi:debug-step-over"
 
     def __init__(self, hass, detector, entry_id, title) -> None:
         super().__init__(hass, detector, entry_id, title, "inhibition_bypass")

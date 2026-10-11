@@ -34,6 +34,8 @@ from custom_components.vtherm_inhibition.const import (
 
 VT_UNIQUE_ID = "vt-bathroom-uid"
 VT_ENTITY_ID = "climate.bathroom"
+VT_UNDERLYING = "climate.bathroom_trv"
+VT_UNDERLYING_2 = "climate.bathroom_trv_2"
 
 
 @pytest.fixture(autouse=True)
@@ -42,11 +44,22 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+class FakeCoreAPI(VThermAPI):
+    """The API of a core with inhibition support: like the real core, it
+    overrides register/unregister (the real one also notifies its VTherms)."""
+
+    def register_inhibition_provider_factory(self, factory) -> None:
+        super().register_inhibition_provider_factory(factory)
+
+    def unregister_inhibition_provider_factory(self, name: str) -> None:
+        super().unregister_inhibition_provider_factory(name)
+
+
 @pytest.fixture(autouse=True)
 def reset_vtherm_api(hass: HomeAssistant):
-    """Give every test a fresh VThermAPI singleton."""
+    """Give every test a fresh core API singleton (created as the core does)."""
     VThermAPI.reset_vtherm_api()
-    VThermAPI.get_vtherm_api(hass)
+    FakeCoreAPI.get_vtherm_api(hass)
     yield
     VThermAPI.reset_vtherm_api()
 
@@ -141,7 +154,13 @@ async def vtherm(hass: HomeAssistant, fake_core: FakeCore, thermostat: FakeTherm
         MockModule(VT_DOMAIN, async_setup_entry=async_setup_entry, async_unload_entry=async_unload_entry),
     )
     mock_platform(hass, f"{VT_DOMAIN}.config_flow", None)
-    vt_entry = MockConfigEntry(domain=VT_DOMAIN, unique_id=VT_UNIQUE_ID, title="Bathroom")
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id=VT_UNIQUE_ID,
+        title="Bathroom",
+        data={"underlying_entity_ids": [VT_UNDERLYING], "opening_degree_entity_ids": ["number.bathroom_trv_opening"]},
+        options={"climate_entity2_id": VT_UNDERLYING_2, "sync_entity_ids": None},
+    )
     vt_entry.add_to_hass(hass)
     device = dr.async_get(hass).async_get_or_create(
         config_entry_id=vt_entry.entry_id, identifiers={(VT_DOMAIN, VT_UNIQUE_ID)}, name="Bathroom"

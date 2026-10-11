@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.vtherm_inhibition.config_flow import _validate_sources, forbidden_sources
 from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
@@ -20,7 +22,7 @@ from custom_components.vtherm_inhibition.const import (
     DOMAIN,
 )
 
-from .conftest import VT_ENTITY_ID, VT_UNIQUE_ID
+from .conftest import VT_ENTITY_ID, VT_UNDERLYING, VT_UNDERLYING_2, VT_UNIQUE_ID
 
 SETTINGS = {
     CONF_SOURCE_ENTITIES: ["climate.bathroom_electric_heater_heater", "binary_sensor.window_block"],
@@ -93,18 +95,73 @@ async def test_not_a_vtherm(hass: HomeAssistant, vtherm) -> None:
     assert result["errors"] == {CONF_TARGET_ENTITY: "not_a_vtherm"}
 
 
-async def test_source_validation(hass: HomeAssistant, vtherm) -> None:
-    """At least one source; the VTherm cannot be its own source."""
+async def _settings_form(hass: HomeAssistant):
     result = await _start(hass)
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_TARGET_ENTITY: VT_ENTITY_ID})
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_TARGET_ENTITY: VT_ENTITY_ID})
+
+
+def _excluded(result) -> list[str]:
+    for key, value in result["data_schema"].schema.items():
+        if str(key) == CONF_SOURCE_ENTITIES:
+            return value.config["exclude_entities"]
+    raise AssertionError("no source selector")
+
+
+async def test_source_validation(hass: HomeAssistant, vtherm, setup_plugin) -> None:
+    """At least one source; sources feeding back into the plugin are refused."""
+    await setup_plugin(["input_boolean.x"], unique_id="vt-kitchen-uid", entity_id="climate.kitchen")
+    result = await _settings_form(hass)
+    excluded = _excluded(result)
+    # The VTherm, its underlyings (data and options) and the plugin entities.
+    for entity_id in (
+        VT_ENTITY_ID,
+        VT_UNDERLYING,
+        VT_UNDERLYING_2,
+        "number.bathroom_trv_opening",
+        "binary_sensor.bathroom_inhibition",
+        "switch.bathroom_inhibition_bypass",
+    ):
+        assert entity_id in excluded, entity_id
+
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: []}
     )
     assert result["errors"] == {CONF_SOURCE_ENTITIES: "no_source"}
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: [VT_ENTITY_ID]}
+    for forbidden in (VT_ENTITY_ID, VT_UNDERLYING, "binary_sensor.bathroom_inhibition"):
+        with pytest.raises(InvalidData):
+            await hass.config_entries.flow.async_configure(
+                result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: [forbidden]}
+            )
+
+
+async def test_source_feeding_back_after_form_shown(hass: HomeAssistant, vtherm) -> None:
+    """A plugin entity created after the form was shown is refused with a translated error."""
+    result = await _settings_form(hass)
+    er.async_get(hass).async_get_or_create(
+        "binary_sensor", DOMAIN, "other_inhibition", suggested_object_id="other_inhibition"
     )
-    assert result["errors"] == {CONF_SOURCE_ENTITIES: "source_is_target"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: ["binary_sensor.other_inhibition"]}
+    )
+    assert result["errors"] == {CONF_SOURCE_ENTITIES: "source_feeds_back"}
+
+
+async def test_validate_sources_server_side(hass: HomeAssistant, vtherm) -> None:
+    """The server-side check refuses the VTherm, its underlyings and plugin entities."""
+    assert _validate_sources(hass, {CONF_SOURCE_ENTITIES: [VT_ENTITY_ID]}, VT_ENTITY_ID) == {
+        CONF_SOURCE_ENTITIES: "source_is_target"
+    }
+    for source in (VT_UNDERLYING, VT_UNDERLYING_2):
+        assert _validate_sources(hass, {CONF_SOURCE_ENTITIES: ["input_boolean.ok", source]}, VT_ENTITY_ID) == {
+            CONF_SOURCE_ENTITIES: "source_feeds_back"
+        }
+    assert _validate_sources(hass, {CONF_SOURCE_ENTITIES: ["input_boolean.ok"]}, VT_ENTITY_ID) == {}
+
+
+async def test_forbidden_sources_robust(hass: HomeAssistant) -> None:
+    """Unknown VTherm, odd config values: no crash, only what makes sense."""
+    assert forbidden_sources(hass, "climate.unknown") == {"climate.unknown"}
+    assert forbidden_sources(hass, "") == set()
 
 
 async def test_duplicate_vtherm_aborts(hass: HomeAssistant, vtherm) -> None:
@@ -133,10 +190,11 @@ async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin
     assert defaults[CONF_SOURCE_ENTITIES] == ["input_boolean.heater"]
     assert defaults[CONF_ACTIVATION_DELAY] == 5
 
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: [VT_ENTITY_ID]}
-    )
-    assert result["errors"] == {CONF_SOURCE_ENTITIES: "source_is_target"}
+    assert VT_UNDERLYING in _excluded(result)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"], {**SETTINGS, CONF_SOURCE_ENTITIES: [VT_UNDERLYING]}
+        )
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],

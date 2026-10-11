@@ -1,0 +1,18 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "inhibition": {
+        "default": "mdi:help-circle-outline",
+        "state": {
+          "on": "mdi:radiator-off",
+          "off": "mdi:radiator"
+        }
+      }
+    },
+    "switch": {
+      "inhibition_bypass": {
+        "default": "mdi:debug-step-over"
+      }
+    }
+  }
+}

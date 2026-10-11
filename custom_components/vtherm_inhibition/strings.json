@@ -32,7 +32,8 @@
     "error": {
       "not_a_vtherm": "This entity is not a Versatile Thermostat.",
       "no_source": "Select at least one source.",
-      "source_is_target": "The VTherm cannot be its own source."
+      "source_is_target": "The VTherm cannot be its own source.",
+      "source_feeds_back": "A source cannot be the VTherm, a device it controls or an inhibition entity."
     },
     "abort": {
       "already_configured": "This VTherm already has an inhibition entry."
@@ -63,7 +64,8 @@
     },
     "error": {
       "no_source": "Select at least one source.",
-      "source_is_target": "The VTherm cannot be its own source."
+      "source_is_target": "The VTherm cannot be its own source.",
+      "source_feeds_back": "A source cannot be the VTherm, a device it controls or an inhibition entity."
     }
   },
   "selector": {
@@ -94,6 +96,24 @@
       "inhibition_bypass": {
         "name": "Inhibition bypass"
       }
+    }
+  },
+  "exceptions": {
+    "core_not_ready": {
+      "message": "Versatile Thermostat is not loaded yet."
+    },
+    "core_without_inhibition": {
+      "message": "The installed Versatile Thermostat does not support inhibition providers. Update it to a release including inhibition providers (issue #2087)."
+    }
+  },
+  "issues": {
+    "core_without_inhibition": {
+      "title": "Versatile Thermostat without inhibition support",
+      "description": "VTherm Inhibition needs Versatile Thermostat with inhibition provider support (the first release including issue #2087) and vtherm_api 0.6.0 or later. Update Versatile Thermostat, then restart Home Assistant."
+    },
+    "missing_sources": {
+      "title": "Missing inhibition sources",
+      "description": "The inhibition of {entry} uses sources that do not exist any more: {sources}. While a source is missing the status becomes unknown after the grace period. Edit the options of the entry to choose other sources."
     }
   }
 }

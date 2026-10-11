@@ -9,10 +9,13 @@ from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 from vtherm_api import InhibitionStatus
 
 from . import InhibitionConfigEntry
 from .entity import InhibitionEntity
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
@@ -29,15 +32,6 @@ class InhibitionBinarySensor(InhibitionEntity, BinarySensorEntity, RestoreEntity
 
     def __init__(self, hass, detector, entry_id, title) -> None:
         super().__init__(hass, detector, entry_id, title, "inhibition")
-
-    @property
-    def icon(self) -> str:
-        """Return a status-dependent icon."""
-        if self._detector.status is InhibitionStatus.ACTIVE:
-            return "mdi:radiator-off"
-        if self._detector.status is InhibitionStatus.INACTIVE:
-            return "mdi:radiator"
-        return "mdi:help-circle-outline"
 
     @property
     def is_on(self) -> bool | None:
@@ -63,4 +57,5 @@ class InhibitionBinarySensor(InhibitionEntity, BinarySensorEntity, RestoreEntity
             STATE_ON: InhibitionStatus.ACTIVE,
             STATE_OFF: InhibitionStatus.INACTIVE,
         }.get(last_state.state)
-        self._detector.restore_status(restored)
+        since = last_state.attributes.get("unavailable_since")
+        self._detector.restore_status(restored, dt_util.parse_datetime(since) if isinstance(since, str) else None)

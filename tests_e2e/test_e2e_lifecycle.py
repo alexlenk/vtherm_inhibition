@@ -570,3 +570,27 @@ async def test_restart_source_not_yet_available(
     await hass.async_block_till_done()
     assert_running(sc)
     assert underlyings.hvac_modes() == ["heat"]
+
+
+# ---------------------------------------------------------------------------
+# Sources feeding back into the plugin are refused (review item 1)
+# ---------------------------------------------------------------------------
+async def test_options_refuse_feedback_sources(hass: HomeAssistant, setup_bathroom) -> None:
+    """The VTherm's underlying climate and the plugin's own entities cannot be sources."""
+    from homeassistant.data_entry_flow import InvalidData
+
+    sc = await setup_bathroom(activation=10, deactivation=30)
+    result = await hass.config_entries.options.async_init(sc.plugin_entry.entry_id)
+    excluded = next(
+        value.config["exclude_entities"]
+        for key, value in result["data_schema"].schema.items()
+        if str(key) == CONF_SOURCE_ENTITIES
+    )
+    for entity_id in (CLIMATE_VT_ID, UNDERLYING_CLIMATE, BATHROOM_SENSOR, BATHROOM_BYPASS):
+        assert entity_id in excluded
+    for forbidden in (UNDERLYING_CLIMATE, BATHROOM_SENSOR):
+        with pytest.raises(InvalidData):
+            await hass.config_entries.options.async_configure(
+                result["flow_id"], {CONF_SOURCE_ENTITIES: [forbidden]}
+            )
+    assert sc.detector.config.source_entities == (SOURCE,)
