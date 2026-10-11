@@ -69,8 +69,9 @@ class FakeThermostat:
 
 
 class FakeCore:
-    """Mimics the core discovery: supports -> create -> post_init -> start ->
-    restore_state -> register callback -> async_refresh_state."""
+    """Mimics the core discovery in the real core order: supports -> create ->
+    post_init -> restore_state -> register callback -> async_start_listening ->
+    async_refresh_state."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -90,9 +91,9 @@ class FakeCore:
                 continue
             provider = factory.create(thermostat)
             provider.post_init(thermostat.entry_infos)
+            provider.restore_state(None)
             self.removers[thermostat.unique_id] = provider.register_transition_callback(self._on_transition)
             await provider.async_start_listening()
-            provider.restore_state(None)
             status = await provider.async_refresh_state()
             self.providers[thermostat.unique_id] = provider
             self.statuses[thermostat.unique_id] = status

@@ -181,12 +181,15 @@ async def test_unload_reports_unknown(hass: HomeAssistant, vtherm, fake_core, se
     assert fake_core.attach_count == 1
 
 
-async def test_options_change_reloads_and_reattaches(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
-    """Options change: entry reload, old provider UNKNOWN, VTherm reattached."""
+async def test_options_change_in_place(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
+    """Options change: no reload, same provider, no UNKNOWN; only a real
+    change of the confirmed status is reported (with the normal delays)."""
     hass.states.async_set(HEATER, "on")
     hass.states.async_set("switch.ac_plug", "off")
     entry = await setup_plugin([HEATER])
-    old_provider = fake_core.providers[VT_UNIQUE_ID]
+    detector = entry.runtime_data
+    provider = fake_core.providers[VT_UNIQUE_ID]
+    sensor_unique = er.async_get(hass).async_get("binary_sensor.bathroom_inhibition").unique_id
 
     hass.config_entries.async_update_entry(
         entry,
@@ -195,13 +198,51 @@ async def test_options_change_reloads_and_reattaches(hass: HomeAssistant, vtherm
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.LOADED
-    assert old_provider.status is UNKNOWN
-    new_provider = fake_core.providers[VT_UNIQUE_ID]
-    assert new_provider is not old_provider
-    assert fake_core.attach_count == 2
-    assert fake_core.statuses[VT_UNIQUE_ID] is INACTIVE
-    assert new_provider.physical_stop_policy == "do_not_turn_off"
+    assert entry.runtime_data is detector
+    assert fake_core.providers[VT_UNIQUE_ID] is provider
+    assert provider.is_listening
+    assert fake_core.attach_count == 1
+    # Delays 0 in this entry: the raw change ACTIVE -> INACTIVE is confirmed at once.
+    assert [t.new_status for t in fake_core.transitions] == [INACTIVE]
+    assert provider.physical_stop_policy == "do_not_turn_off"
+    assert fake_core.transitions[0].stop_policy == "do_not_turn_off"
+    # The old source is not followed any more, the new one is.
+    hass.states.async_set(HEATER, "off")
+    hass.states.async_set(HEATER, "on")
+    await hass.async_block_till_done()
+    assert len(fake_core.transitions) == 1
+    hass.states.async_set("switch.ac_plug", "on")
+    await hass.async_block_till_done()
+    assert [t.new_status for t in fake_core.transitions] == [INACTIVE, ACTIVE]
+    assert [t.sequence for t in fake_core.transitions] == [1, 2]
+    # Entities follow the new configuration.
+    state = hass.states.get("binary_sensor.bathroom_inhibition")
+    assert er.async_get(hass).async_get("binary_sensor.bathroom_inhibition").unique_id == sensor_unique
+    assert list(state.attributes["sources"]) == ["switch.ac_plug"]
+    assert state.attributes["physical_stop_policy"] == "do_not_turn_off"
     assert _api(hass).get_inhibition_provider_factory(PROVIDER_NAME) is not None
+
+
+async def test_options_policy_only_change_emits_nothing(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
+    """A policy-only change is read live by the core at the next entry; no transition."""
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    provider = fake_core.providers[VT_UNIQUE_ID]
+    hass.config_entries.async_update_entry(entry, options={CONF_PHYSICAL_STOP_POLICY: "do_not_turn_off"})
+    await hass.async_block_till_done()
+    assert fake_core.transitions == []
+    assert provider.physical_stop_policy == "do_not_turn_off"
+    assert await provider.async_refresh_state() is ACTIVE
+
+
+async def test_options_unchanged_is_noop(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
+    """Saving the same options (or a title change) does nothing."""
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    hass.config_entries.async_update_entry(entry, title="Bad", options={CONF_SOURCE_ENTITIES: [HEATER]})
+    await hass.async_block_till_done()
+    assert fake_core.transitions == []
+    assert fake_core.attach_count == 1
 
 
 async def test_remove_entry_releases_vtherm(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:

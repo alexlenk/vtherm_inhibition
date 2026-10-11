@@ -120,8 +120,8 @@ async def test_duplicate_vtherm_aborts(hass: HomeAssistant, vtherm) -> None:
     assert result["reason"] == "already_configured"
 
 
-async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin) -> None:
-    """Options flow pre-fills current values, validates and applies after reload."""
+async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin, advance) -> None:
+    """Options flow pre-fills current values, validates and applies them in place."""
     hass.states.async_set("input_boolean.heater", "on")
     hass.states.async_set("climate.ac", "cool")
     entry = await setup_plugin(["input_boolean.heater"], activation=5)
@@ -149,5 +149,11 @@ async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin
     detector = entry.runtime_data
     assert detector.config.source_entities == ("climate.ac",)
     assert detector.config.physical_stop_policy == "do_not_turn_off"
-    # climate.ac is in "cool", which is not an inhibiting mode any more.
-    assert fake_core.providers[VT_UNIQUE_ID].status == "inactive"
+    # climate.ac is in "cool", which is not an inhibiting mode any more: the raw
+    # change goes through the new deactivation delay, on the same provider.
+    provider = fake_core.providers[VT_UNIQUE_ID]
+    assert fake_core.attach_count == 1
+    assert provider.status == "active"
+    await advance(120)
+    assert provider.status == "inactive"
+    assert [t.new_status for t in fake_core.transitions] == ["inactive"]

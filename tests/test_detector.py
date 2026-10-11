@@ -437,3 +437,136 @@ async def test_set_bypass_idempotent(hass: HomeAssistant, setup_plugin, attach) 
     await hass.async_block_till_done()
     assert provider.status is ACTIVE
     assert rec.transitions == []
+
+
+# ---------------------------------------------------------------------------
+# In-place reconfiguration (options flow)
+# ---------------------------------------------------------------------------
+async def _update(hass: HomeAssistant, entry, **options) -> None:
+    hass.config_entries.async_update_entry(entry, options={**entry.options, **options})
+    await hass.async_block_till_done()
+
+
+async def test_reconfigure_new_sources_use_delays(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """A raw change caused by new sources follows the normal delay."""
+    hass.states.async_set(HEATER, "on")
+    hass.states.async_set(BLOCK, "off")
+    entry = await setup_plugin([HEATER], activation=30, deactivation=60)
+    provider, rec = await attach()
+    assert provider.status is ACTIVE
+
+    await _update(hass, entry, source_entities=[BLOCK])
+    assert provider.status is ACTIVE
+    assert entry.runtime_data.pending_status is INACTIVE
+    await advance(59)
+    assert provider.status is ACTIVE
+    await advance(1)
+    assert provider.status is INACTIVE
+    assert rec.statuses == [INACTIVE]
+    assert provider.is_listening
+
+
+async def test_reconfigure_without_status_change(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """Adding an inactive source while active changes nothing."""
+    hass.states.async_set(HEATER, "on")
+    hass.states.async_set(BLOCK, "off")
+    entry = await setup_plugin([HEATER], activation=30, deactivation=60)
+    provider, rec = await attach()
+    await _update(hass, entry, source_entities=[HEATER, BLOCK], activation_delay=5, unavailable_grace_period=10)
+    await advance(600)
+    assert provider.status is ACTIVE
+    assert rec.transitions == []
+    assert entry.runtime_data.config.activation_delay == 5
+
+
+async def test_reconfigure_climate_modes(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """Changing the inhibiting HVAC modes re-evaluates the climate sources."""
+    hass.states.async_set(AC, "cool")
+    entry = await setup_plugin([AC], deactivation=20)
+    provider, rec = await attach()
+    assert provider.status is ACTIVE
+    await _update(hass, entry, climate_hvac_modes=["heat"])
+    await advance(20)
+    assert provider.status is INACTIVE
+    assert rec.statuses == [INACTIVE]
+
+
+async def test_reconfigure_moves_running_timer_deadline(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """A running timer keeps its start; its deadline follows the new delay."""
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER], activation=30, deactivation=60)
+    provider, rec = await attach()
+    hass.states.async_set(HEATER, "on")
+    await advance(10)
+
+    await _update(hass, entry, activation_delay=15)
+    await advance(4)
+    assert provider.status is INACTIVE
+    await advance(1)
+    assert provider.status is ACTIVE
+
+    hass.states.async_set(HEATER, "off")
+    await advance(10)
+    await _update(hass, entry, deactivation_delay=120)
+    await advance(100)
+    assert provider.status is ACTIVE
+    await advance(10)
+    assert provider.status is INACTIVE
+    assert rec.statuses == [ACTIVE, INACTIVE]
+
+
+async def test_reconfigure_elapsed_deadline_confirms_now(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """Shortening a delay below the elapsed time confirms at once."""
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER], activation=30)
+    provider, rec = await attach()
+    hass.states.async_set(HEATER, "on")
+    await advance(10)
+    await _update(hass, entry, activation_delay=5)
+    assert provider.status is ACTIVE
+    assert entry.runtime_data.pending_status is None
+    assert rec.statuses == [ACTIVE]
+
+
+async def test_reconfigure_grace_period(hass: HomeAssistant, setup_plugin, attach, advance) -> None:
+    """The grace deadline follows a changed grace period; removing the
+    unavailable source ends the hold without a transition."""
+    hass.states.async_set(AC, "off")
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([AC, HEATER], grace=300)
+    provider, rec = await attach()
+    hass.states.async_set(AC, "unavailable")
+    await advance(60)
+    await _update(hass, entry, unavailable_grace_period=100)
+    await advance(39)
+    assert provider.status is INACTIVE
+    await advance(1)
+    assert provider.status is UNKNOWN
+
+    await _update(hass, entry, source_entities=[HEATER])
+    assert provider.status is INACTIVE
+    assert rec.statuses == [UNKNOWN, INACTIVE]
+
+
+async def test_reconfigure_with_bypass(hass: HomeAssistant, setup_plugin, attach) -> None:
+    """While bypassed, a reconfiguration keeps INACTIVE."""
+    hass.states.async_set(HEATER, "off")
+    hass.states.async_set(BLOCK, "on")
+    entry = await setup_plugin([HEATER])
+    provider, rec = await attach()
+    entry.runtime_data.set_bypass(True)
+    await _update(hass, entry, source_entities=[BLOCK])
+    assert provider.status is INACTIVE
+    assert rec.transitions == []
+
+
+async def test_reconfigure_before_start(hass: HomeAssistant) -> None:
+    """A detector not started yet only stores the new config."""
+    from custom_components.vtherm_inhibition.detector import InhibitionDetector
+    from custom_components.vtherm_inhibition.models import InhibitionConfig
+
+    detector = InhibitionDetector(hass, InhibitionConfig.from_entry({"source_entities": [HEATER]}), "x")
+    new = InhibitionConfig.from_entry({"source_entities": [BLOCK]})
+    detector.async_reconfigure(new)
+    assert detector.config is new
+    assert detector.status is UNKNOWN

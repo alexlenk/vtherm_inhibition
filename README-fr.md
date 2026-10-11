@@ -101,7 +101,7 @@ Ajoutez une entrée d'intégration **par VTherm** : choisissez d'abord le Versat
 | Délai de grâce si indisponible (`unavailable_grace_period`) | secondes, 0–86400 | `300` | Durée de conservation du dernier état confirmé lorsque des sources sont indisponibles. |
 | À l'inhibition (`physical_stop_policy`) | `turn_off` / `do_not_turn_off` | `turn_off` | Politique d'arrêt physique, voir ci-dessus. |
 
-L'enregistrement des options recharge l'entrée, puis le VTherm ciblé rattache le nouveau fournisseur (voir [Cycle de vie](#cycle-de-vie)).
+L'enregistrement des options les applique **à chaud**, sans recharger l'entrée ni le VTherm et sans aucune commande aux équipements (voir [Cycle de vie](#cycle-de-vie)).
 
 ### Exemples
 
@@ -138,9 +138,10 @@ Attributs du capteur binaire :
 
 - La fabrique de fournisseurs est enregistrée dans l'API VTherm à la mise en place de la première entrée et retirée au déchargement de la dernière. Elle n'accepte un VTherm que si une entrée cible son identifiant unique (l'entity ID n'est utilisé que si le VTherm n'expose pas d'identifiant unique).
 - Au démarrage de Home Assistant, VTherm découvre lui-même la fabrique (son `async_startup` s'exécute une fois Home Assistant démarré).
-- Lorsqu'une entrée est ajoutée, modifiée ou réactivée alors que Home Assistant tourne, le plugin commence par surveiller ses sources, puis enregistre la fabrique : VTherm rattache aussitôt le fournisseur et obtient immédiatement un statut confirmé. Si la fabrique était déjà enregistrée (une autre entrée est chargée), le plugin recharge plutôt le VTherm ciblé pour qu'il rattache le fournisseur.
-- Au déchargement ou au rechargement d'une entrée, le fournisseur rattaché transmet `unknown` avant de se détacher : VTherm reste retiré par prudence jusqu'à ce qu'un fournisseur confirme `inactive`. Lorsqu'une entrée est **supprimée ou désactivée**, le VTherm est rechargé sans fournisseur et fonctionne comme avant.
-- Conséquence pour un VTherm qui n'est **pas** inhibé à ce moment : avec la politique `turn_off`, ce `unknown` fait envoyer par VTherm son arrêt de précaution ; l'équipement est donc brièvement éteint puis rallumé dès que le nouveau fournisseur confirme `inactive` (modification des options, rechargement) ou dès que le VTherm est rechargé sans fournisseur (suppression, désactivation).
+- Lorsqu'une entrée est ajoutée ou réactivée alors que Home Assistant tourne, le plugin commence par surveiller ses sources, puis enregistre la fabrique : VTherm rattache aussitôt le fournisseur et obtient immédiatement un statut confirmé. Si la fabrique était déjà enregistrée (une autre entrée est chargée), le plugin recharge plutôt le VTherm ciblé pour qu'il rattache le fournisseur.
+- **Modification des options** : appliquée à chaud à l'entrée en cours ; le fournisseur reste rattaché et ne transmet rien tant que son état confirmé ne change pas réellement. Un changement d'état brut dû aux nouvelles sources ou aux nouveaux modes HVAC suit les règles normales (délai d'activation/désactivation, délai de grâce). Une temporisation déjà en cours garde son heure de départ et son échéance suit le nouveau délai (confirmation immédiate s'il est déjà écoulé). Un changement de la seule politique ne transmet rien : VTherm lit la politique au début d'une inhibition et garde celle capturée à l'entrée jusqu'à la sortie. Les entités reflètent immédiatement les nouveaux réglages.
+- Au déchargement ou au rechargement d'une entrée (par exemple **Recharger** dans l'interface), le fournisseur rattaché transmet `unknown` avant de se détacher : VTherm reste retiré par prudence jusqu'à ce qu'un fournisseur confirme `inactive`. Lorsqu'une entrée est **supprimée ou désactivée**, le VTherm est rechargé sans fournisseur et fonctionne comme avant.
+- Conséquence pour un VTherm qui n'est **pas** inhibé à ce moment : avec la politique `turn_off`, ce `unknown` fait envoyer par VTherm son arrêt de précaution ; l'équipement est donc brièvement éteint puis rallumé dès que le nouveau fournisseur confirme `inactive` (rechargement) ou dès que le VTherm est rechargé sans fournisseur (suppression, désactivation). L'enregistrement des options ne le fait pas.
 
 ## Limites
 

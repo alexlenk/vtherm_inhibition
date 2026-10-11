@@ -97,6 +97,7 @@ class InhibitionDetector:
         self._timer_cancel: CALLBACK_TYPE | None = None
         self._timer_target: InhibitionStatus | None = None
         self._timer_until: datetime | None = None
+        self._timer_started: datetime | None = None
         self._timer_job = HassJob(self._async_timer_fired, f"{name} inhibition timer", cancel_on_shutdown=True)
         self._unsub_sources: CALLBACK_TYPE | None = None
         self._providers: list[VThermInhibitionProvider] = []
@@ -193,10 +194,7 @@ class InhibitionDetector:
         if self._started:
             return
         self._started = True
-        if self._config.source_entities:
-            self._unsub_sources = async_track_state_change_event(
-                self._hass, list(self._config.source_entities), self._async_source_changed
-            )
+        self._subscribe()
         _LOGGER.info(
             "%s - started with sources %s, policy %s",
             self,
@@ -204,6 +202,73 @@ class InhibitionDetector:
             self._config.physical_stop_policy,
         )
         self._evaluate()
+
+    @callback
+    def _subscribe(self) -> None:
+        if self._unsub_sources is not None:
+            self._unsub_sources()
+            self._unsub_sources = None
+        if self._config.source_entities:
+            self._unsub_sources = async_track_state_change_event(
+                self._hass, list(self._config.source_entities), self._async_source_changed
+            )
+
+    @callback
+    def async_reconfigure(self, config: InhibitionConfig) -> None:
+        """Apply new options in place, without stopping the attached providers.
+
+        * The sources are re-subscribed and re-evaluated. A raw status change
+          caused by the new sources or HVAC modes follows the normal rules
+          (activation/deactivation delay, grace period); before the first
+          confirmation the first known aggregate is still confirmed at once.
+        * A timer still running for the same target keeps its start time; its
+          deadline becomes start + new delay (confirmed at once if already
+          elapsed).
+        * The policy is read live by the providers: a policy-only change emits
+          no transition; the core captures the policy at the next entry.
+        """
+        old_config = self._config
+        if config == old_config:
+            return
+        self._config = config
+        _LOGGER.info(
+            "%s - reconfigured: sources %s, policy %s",
+            self,
+            list(config.source_entities),
+            config.physical_stop_policy,
+        )
+        if not self._started:
+            self._publish()
+            return
+        if config.source_entities != old_config.source_entities:
+            self._sources = {
+                entity_id: source for entity_id, source in self._sources.items() if entity_id in config.source_entities
+            }
+            self._subscribe()
+        self._evaluate()
+        self._reschedule_running_timer()
+        self._publish()
+
+    @callback
+    def _reschedule_running_timer(self) -> None:
+        """Move a running timer's deadline to its start + the current delay."""
+        target = self._timer_target
+        if self._timer_cancel is None or target is None or self._timer_started is None:
+            return
+        deadline = self._timer_started + timedelta(seconds=self._delay_for(target))
+        if deadline == self._timer_until:
+            return
+        self._timer_cancel()
+        now = dt_util.utcnow()
+        if deadline <= now:
+            self._timer_cancel = None
+            self._timer_target = None
+            self._timer_until = None
+            self._timer_started = None
+            self._confirm(target)
+            return
+        self._timer_until = deadline
+        self._timer_cancel = async_call_later(self._hass, (deadline - now).total_seconds(), self._timer_job)
 
     @callback
     def async_stop(self) -> None:
@@ -356,7 +421,8 @@ class InhibitionDetector:
             self._confirm(target)
             return
         self._timer_target = target
-        self._timer_until = dt_util.utcnow() + timedelta(seconds=delay)
+        self._timer_started = dt_util.utcnow()
+        self._timer_until = self._timer_started + timedelta(seconds=delay)
         self._timer_cancel = async_call_later(self._hass, delay, self._timer_job)
         _LOGGER.debug("%s - %s pending for %ss", self, target, delay)
         self._publish()
@@ -368,6 +434,7 @@ class InhibitionDetector:
         self._timer_cancel = None
         self._timer_target = None
         self._timer_until = None
+        self._timer_started = None
 
     @callback
     def _async_timer_fired(self, _now: datetime) -> None:
@@ -375,6 +442,7 @@ class InhibitionDetector:
         self._timer_cancel = None
         self._timer_target = None
         self._timer_until = None
+        self._timer_started = None
         if target is None or not self._started:
             return
         self._confirm(target)

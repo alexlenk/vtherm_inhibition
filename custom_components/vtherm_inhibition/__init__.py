@@ -89,15 +89,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: InhibitionConfigEntry) -> None:
-    """Reload the entry when its options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Apply changed options in place.
+
+    The entry is deliberately not reloaded: an unload makes the provider report
+    UNKNOWN (contract), and the core would then withdraw a VTherm that runs
+    normally and send it a precautionary stop. The running detector is
+    reconfigured instead; the attached provider stays attached and only a real
+    change of the confirmed status produces a transition.
+    """
+    detector = entry.runtime_data
+    config = InhibitionConfig.from_entry(entry.data, entry.options)
+    if config.vtherm_unique_id != detector.config.vtherm_unique_id:
+        # The target VTherm cannot change through the options; reload to be safe.
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+    detector.async_reconfigure(config)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -> bool:
     """Unload: attached providers report UNKNOWN, then detach.
 
     The VTherm keeps its safe withdrawal until a provider confirms INACTIVE
-    again (on reload, ``async_setup_entry`` reloads the VTherm). When the
+    again (on reload, the factory registration or ``async_setup_entry``
+    re-attaches a provider). Option changes do not unload. When the
     entry is disabled or removed, the VTherm is reloaded without provider.
     """
     detector = entry.runtime_data

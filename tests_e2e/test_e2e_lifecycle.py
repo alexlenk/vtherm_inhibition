@@ -21,7 +21,12 @@ from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import CoreState, HomeAssistant
 from pytest_homeassistant_custom_component.common import mock_restore_cache
 
-from custom_components.vtherm_inhibition.const import CONF_ACTIVATION_DELAY, PROVIDER_NAME
+from custom_components.vtherm_inhibition.const import (
+    CONF_ACTIVATION_DELAY,
+    CONF_PHYSICAL_STOP_POLICY,
+    CONF_SOURCE_ENTITIES,
+    PROVIDER_NAME,
+)
 from custom_components.vtherm_inhibition.factory import InhibitionProviderFactory
 from custom_components.vtherm_inhibition.provider import VThermInhibitionProvider
 
@@ -381,32 +386,59 @@ async def test_delete_entry(hass: HomeAssistant, setup_bathroom, underlyings: Un
 
 @pytest.mark.parametrize("inhibited", [False, True])
 async def test_options_change(hass: HomeAssistant, setup_bathroom, underlyings: Underlyings, advance, inhibited) -> None:
-    """Options change: entry reload, provider reattached with the new settings."""
+    """Options change: applied in place, same provider, no command to the underlyings."""
     sc = await setup_bathroom(activation=10, deactivation=30)
     if inhibited:
         await _inhibit(hass, sc, advance)
     underlyings.reset()
+    old_provider = sc.vt.inhibition_manager.provider
+    sequence = old_provider.sequence
 
-    hass.config_entries.async_update_entry(sc.plugin_entry, options={CONF_ACTIVATION_DELAY: 3})
+    hass.config_entries.async_update_entry(
+        sc.plugin_entry, options={CONF_ACTIVATION_DELAY: 3, CONF_PHYSICAL_STOP_POLICY: "do_not_turn_off"}
+    )
     await hass.async_block_till_done()
-    await advance(5)
+    await advance(60)
 
     assert sc.plugin_entry.state is ConfigEntryState.LOADED
     assert sc.detector.config.activation_delay == 3
+    assert sc.vt.inhibition_manager.provider is old_provider
+    assert old_provider.sequence == sequence  # no transition at all
     assert_single_attachment(sc)
+    assert underlyings.calls == []
     if inhibited:
-        # still withdrawn by the new provider, no command at all
         assert_withdrawn(sc)
-        assert underlyings.calls == []
+        # The policy captured at entry is kept until the exit
+        assert sc.attrs["effective_stop_policy"] == "turn_off"
     else:
-        # UNKNOWN on unload (precautionary stop), INACTIVE again after the setup
-        assert underlyings.hvac_modes() == ["off", "heat"]
         assert_running(sc)
-        underlyings.reset()
+        # The new delay and policy apply to the next entry: no turn_off
         hass.states.async_set(SOURCE, STATE_ON)
         await advance(4)
         assert_withdrawn(sc)
-        assert underlyings.hvac_modes() == ["off"]
+        assert sc.attrs["effective_stop_policy"] == "do_not_turn_off"
+        assert underlyings.hvac_modes() == []
+
+
+async def test_options_change_sources(hass: HomeAssistant, setup_bathroom, underlyings: Underlyings, advance) -> None:
+    """New sources while inhibited: the exit goes through the deactivation delay, once."""
+    other = "input_boolean.other_source"
+    hass.states.async_set(other, STATE_OFF)
+    sc = await setup_bathroom(activation=10, deactivation=30)
+    await _inhibit(hass, sc, advance)
+    underlyings.reset()
+
+    hass.config_entries.async_update_entry(sc.plugin_entry, options={CONF_SOURCE_ENTITIES: [other]})
+    await hass.async_block_till_done()
+    await advance(29)
+    assert_withdrawn(sc)
+    assert underlyings.calls == []
+    await advance(1)
+    assert_running(sc)
+    assert underlyings.hvac_modes() == ["heat"]
+    assert hass.states.get(BATHROOM_SENSOR).attributes["sources"] == {
+        other: {"state": "off", "contribution": "inactive"}
+    }
 
 
 # ---------------------------------------------------------------------------
