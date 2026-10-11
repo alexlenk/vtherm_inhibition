@@ -1,0 +1,99 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Inhibition VTherm",
+        "description": "Sélectionnez le Versatile Thermostat qui doit se retirer lorsqu'un autre équipement prend le relais.",
+        "data": {
+          "target_entity": "Versatile Thermostat"
+        }
+      },
+      "settings": {
+        "title": "Sources d'inhibition",
+        "description": "Réglages de {vtherm}.",
+        "data": {
+          "source_entities": "Sources",
+          "climate_hvac_modes": "Modes HVAC inhibants (sources climate)",
+          "activation_delay": "Délai d'activation",
+          "deactivation_delay": "Délai de désactivation",
+          "unavailable_grace_period": "Délai de grâce si indisponible",
+          "physical_stop_policy": "À l'inhibition"
+        },
+        "data_description": {
+          "source_entities": "Capteurs binaires, input_boolean et interrupteurs inhibent lorsqu'ils sont à on ; les entités climate dans l'un des modes ci-dessous. Une seule source active suffit.",
+          "climate_hvac_modes": "Une source climate inhibe tant que son mode HVAC fait partie de cette liste.",
+          "activation_delay": "Secondes pendant lesquelles une source doit rester active avant le retrait du VTherm.",
+          "deactivation_delay": "Secondes pendant lesquelles toutes les sources doivent rester inactives avant la reprise.",
+          "unavailable_grace_period": "Secondes pendant lesquelles le dernier état est conservé si une source est indisponible, avant de passer à inconnu.",
+          "physical_stop_policy": "Éteindre une fois les équipements du VTherm, ou les laisser en l'état."
+        }
+      }
+    },
+    "error": {
+      "not_a_vtherm": "Cette entité n'est pas un Versatile Thermostat.",
+      "no_source": "Sélectionnez au moins une source.",
+      "source_is_target": "Le VTherm ne peut pas être sa propre source."
+    },
+    "abort": {
+      "already_configured": "Ce VTherm a déjà une configuration d'inhibition."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sources d'inhibition",
+        "description": "Réglages de {vtherm}.",
+        "data": {
+          "source_entities": "Sources",
+          "climate_hvac_modes": "Modes HVAC inhibants (sources climate)",
+          "activation_delay": "Délai d'activation",
+          "deactivation_delay": "Délai de désactivation",
+          "unavailable_grace_period": "Délai de grâce si indisponible",
+          "physical_stop_policy": "À l'inhibition"
+        },
+        "data_description": {
+          "source_entities": "Capteurs binaires, input_boolean et interrupteurs inhibent lorsqu'ils sont à on ; les entités climate dans l'un des modes ci-dessous. Une seule source active suffit.",
+          "climate_hvac_modes": "Une source climate inhibe tant que son mode HVAC fait partie de cette liste.",
+          "activation_delay": "Secondes pendant lesquelles une source doit rester active avant le retrait du VTherm.",
+          "deactivation_delay": "Secondes pendant lesquelles toutes les sources doivent rester inactives avant la reprise.",
+          "unavailable_grace_period": "Secondes pendant lesquelles le dernier état est conservé si une source est indisponible, avant de passer à inconnu.",
+          "physical_stop_policy": "Éteindre une fois les équipements du VTherm, ou les laisser en l'état."
+        }
+      }
+    },
+    "error": {
+      "no_source": "Sélectionnez au moins une source.",
+      "source_is_target": "Le VTherm ne peut pas être sa propre source."
+    }
+  },
+  "selector": {
+    "hvac_mode": {
+      "options": {
+        "heat": "Chauffage",
+        "cool": "Climatisation",
+        "heat_cool": "Chauffage/Climatisation",
+        "auto": "Auto",
+        "dry": "Déshumidification",
+        "fan_only": "Ventilation"
+      }
+    },
+    "physical_stop_policy": {
+      "options": {
+        "turn_off": "Éteindre les équipements",
+        "do_not_turn_off": "Ne pas éteindre les équipements"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "inhibition": {
+        "name": "Inhibition"
+      }
+    },
+    "switch": {
+      "inhibition_bypass": {
+        "name": "Contournement de l'inhibition"
+      }
+    }
+  }
+}

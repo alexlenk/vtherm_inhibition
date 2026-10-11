@@ -1,0 +1,99 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "VTherm-Sperre",
+        "description": "Wähle den Versatile Thermostat, der zurücktreten soll, während ein anderes Gerät übernimmt.",
+        "data": {
+          "target_entity": "Versatile Thermostat"
+        }
+      },
+      "settings": {
+        "title": "Sperrquellen",
+        "description": "Einstellungen für {vtherm}.",
+        "data": {
+          "source_entities": "Quellen",
+          "climate_hvac_modes": "Sperrende HVAC-Modi (Climate-Quellen)",
+          "activation_delay": "Aktivierungsverzögerung",
+          "deactivation_delay": "Deaktivierungsverzögerung",
+          "unavailable_grace_period": "Toleranzzeit bei Nichtverfügbarkeit",
+          "physical_stop_policy": "Bei Sperre"
+        },
+        "data_description": {
+          "source_entities": "Binärsensoren, Input-Booleans und Schalter sperren, wenn sie an sind; Climate-Entitäten in einem der Modi unten. Eine aktive Quelle genügt.",
+          "climate_hvac_modes": "Eine Climate-Quelle sperrt, solange ihr HVAC-Modus in dieser Liste ist.",
+          "activation_delay": "Sekunden, die eine Quelle aktiv bleiben muss, bevor der VTherm zurücktritt.",
+          "deactivation_delay": "Sekunden, die alle Quellen inaktiv bleiben müssen, bevor der VTherm wieder übernimmt.",
+          "unavailable_grace_period": "Sekunden, in denen der letzte Status gehalten wird, solange eine Quelle nicht verfügbar ist, bevor er unbekannt wird.",
+          "physical_stop_policy": "Die Geräte des VTherm einmal ausschalten oder unverändert lassen."
+        }
+      }
+    },
+    "error": {
+      "not_a_vtherm": "Diese Entität ist kein Versatile Thermostat.",
+      "no_source": "Wähle mindestens eine Quelle.",
+      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein."
+    },
+    "abort": {
+      "already_configured": "Für diesen VTherm gibt es bereits eine Sperre."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sperrquellen",
+        "description": "Einstellungen für {vtherm}.",
+        "data": {
+          "source_entities": "Quellen",
+          "climate_hvac_modes": "Sperrende HVAC-Modi (Climate-Quellen)",
+          "activation_delay": "Aktivierungsverzögerung",
+          "deactivation_delay": "Deaktivierungsverzögerung",
+          "unavailable_grace_period": "Toleranzzeit bei Nichtverfügbarkeit",
+          "physical_stop_policy": "Bei Sperre"
+        },
+        "data_description": {
+          "source_entities": "Binärsensoren, Input-Booleans und Schalter sperren, wenn sie an sind; Climate-Entitäten in einem der Modi unten. Eine aktive Quelle genügt.",
+          "climate_hvac_modes": "Eine Climate-Quelle sperrt, solange ihr HVAC-Modus in dieser Liste ist.",
+          "activation_delay": "Sekunden, die eine Quelle aktiv bleiben muss, bevor der VTherm zurücktritt.",
+          "deactivation_delay": "Sekunden, die alle Quellen inaktiv bleiben müssen, bevor der VTherm wieder übernimmt.",
+          "unavailable_grace_period": "Sekunden, in denen der letzte Status gehalten wird, solange eine Quelle nicht verfügbar ist, bevor er unbekannt wird.",
+          "physical_stop_policy": "Die Geräte des VTherm einmal ausschalten oder unverändert lassen."
+        }
+      }
+    },
+    "error": {
+      "no_source": "Wähle mindestens eine Quelle.",
+      "source_is_target": "Der VTherm kann nicht seine eigene Quelle sein."
+    }
+  },
+  "selector": {
+    "hvac_mode": {
+      "options": {
+        "heat": "Heizen",
+        "cool": "Kühlen",
+        "heat_cool": "Heizen/Kühlen",
+        "auto": "Automatisch",
+        "dry": "Entfeuchten",
+        "fan_only": "Nur Lüfter"
+      }
+    },
+    "physical_stop_policy": {
+      "options": {
+        "turn_off": "Geräte ausschalten",
+        "do_not_turn_off": "Geräte nicht ausschalten"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "inhibition": {
+        "name": "Sperre"
+      }
+    },
+    "switch": {
+      "inhibition_bypass": {
+        "name": "Sperre umgehen"
+      }
+    }
+  }
+}

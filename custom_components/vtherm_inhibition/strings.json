@@ -1,0 +1,99 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "VTherm inhibition",
+        "description": "Select the Versatile Thermostat that must step back while another device takes over.",
+        "data": {
+          "target_entity": "Versatile Thermostat"
+        }
+      },
+      "settings": {
+        "title": "Inhibition sources",
+        "description": "Settings for {vtherm}.",
+        "data": {
+          "source_entities": "Sources",
+          "climate_hvac_modes": "Inhibiting HVAC modes (climate sources)",
+          "activation_delay": "Activation delay",
+          "deactivation_delay": "Deactivation delay",
+          "unavailable_grace_period": "Unavailable grace period",
+          "physical_stop_policy": "On inhibition"
+        },
+        "data_description": {
+          "source_entities": "Binary sensors, input booleans and switches inhibit when on; climate entities when in one of the modes below. Any active source inhibits.",
+          "climate_hvac_modes": "A climate source inhibits while its HVAC mode is one of these.",
+          "activation_delay": "Seconds a source must stay active before the VTherm steps back.",
+          "deactivation_delay": "Seconds all sources must stay inactive before the VTherm resumes.",
+          "unavailable_grace_period": "Seconds the last status is kept while a source is unavailable before it becomes unknown.",
+          "physical_stop_policy": "Turn the VTherm's devices off once, or leave them as they are."
+        }
+      }
+    },
+    "error": {
+      "not_a_vtherm": "This entity is not a Versatile Thermostat.",
+      "no_source": "Select at least one source.",
+      "source_is_target": "The VTherm cannot be its own source."
+    },
+    "abort": {
+      "already_configured": "This VTherm already has an inhibition entry."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Inhibition sources",
+        "description": "Settings for {vtherm}.",
+        "data": {
+          "source_entities": "Sources",
+          "climate_hvac_modes": "Inhibiting HVAC modes (climate sources)",
+          "activation_delay": "Activation delay",
+          "deactivation_delay": "Deactivation delay",
+          "unavailable_grace_period": "Unavailable grace period",
+          "physical_stop_policy": "On inhibition"
+        },
+        "data_description": {
+          "source_entities": "Binary sensors, input booleans and switches inhibit when on; climate entities when in one of the modes below. Any active source inhibits.",
+          "climate_hvac_modes": "A climate source inhibits while its HVAC mode is one of these.",
+          "activation_delay": "Seconds a source must stay active before the VTherm steps back.",
+          "deactivation_delay": "Seconds all sources must stay inactive before the VTherm resumes.",
+          "unavailable_grace_period": "Seconds the last status is kept while a source is unavailable before it becomes unknown.",
+          "physical_stop_policy": "Turn the VTherm's devices off once, or leave them as they are."
+        }
+      }
+    },
+    "error": {
+      "no_source": "Select at least one source.",
+      "source_is_target": "The VTherm cannot be its own source."
+    }
+  },
+  "selector": {
+    "hvac_mode": {
+      "options": {
+        "heat": "Heat",
+        "cool": "Cool",
+        "heat_cool": "Heat/Cool",
+        "auto": "Auto",
+        "dry": "Dry",
+        "fan_only": "Fan only"
+      }
+    },
+    "physical_stop_policy": {
+      "options": {
+        "turn_off": "Turn off the devices",
+        "do_not_turn_off": "Do not turn off the devices"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "inhibition": {
+        "name": "Inhibition"
+      }
+    },
+    "switch": {
+      "inhibition_bypass": {
+        "name": "Inhibition bypass"
+      }
+    }
+  }
+}
