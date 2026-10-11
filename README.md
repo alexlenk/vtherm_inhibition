@@ -101,7 +101,7 @@ Add one integration entry **per VTherm**: first select the Versatile Thermostat,
 | Unavailable grace period (`unavailable_grace_period`) | seconds, 0–86400 | `300` | How long the last confirmed status is kept while sources are unavailable. |
 | On inhibition (`physical_stop_policy`) | `turn_off` / `do_not_turn_off` | `turn_off` | Physical stop policy, see above. |
 
-Saving the options reloads the entry; while Home Assistant is running, the plugin then reloads the targeted VTherm so that it attaches the new provider.
+Saving the options reloads the entry, and the targeted VTherm then attaches the new provider (see [Lifecycle](#lifecycle)).
 
 ### Examples
 
@@ -137,8 +137,10 @@ Attributes of the binary sensor:
 ## Lifecycle
 
 - The provider factory is registered in the VTherm API when the first entry is set up and unregistered when the last entry is unloaded. It accepts a VTherm only if an entry targets its unique ID (its entity ID is used only when the VTherm runtime has no unique ID).
-- At Home Assistant startup, VTherm discovers the factory itself (its `async_startup` runs after Home Assistant has started). When an entry is added, changed or re-enabled while Home Assistant is running, the plugin reloads the targeted VTherm so that it attaches the provider.
+- At Home Assistant startup, VTherm discovers the factory itself (its `async_startup` runs after Home Assistant has started).
+- When an entry is added, changed or re-enabled while Home Assistant is running, the plugin first starts watching its sources, then registers the factory: VTherm attaches the provider at once and gets a confirmed status right away. If the factory was already registered (another entry is loaded), the plugin reloads the targeted VTherm instead so that it attaches the provider.
 - When an entry is unloaded or reloaded, the attached provider reports `unknown` before it detaches: VTherm stays safely withdrawn until a provider confirms `inactive`. When an entry is **deleted or disabled**, the VTherm is reloaded without provider and works as before.
+- Consequence for a VTherm that is **not** inhibited at that moment: with the `turn_off` policy, this `unknown` makes VTherm send its precautionary stop, so the device is turned off briefly and back on once the new provider confirms `inactive` (options change, reload) or once the VTherm is reloaded without provider (deletion, disabling).
 
 ## Limitations
 

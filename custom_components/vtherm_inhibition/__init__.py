@@ -67,17 +67,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -
     detector = InhibitionDetector(hass, config, entry.title)
     entry.runtime_data = detector
 
-    detectors: dict[str, InhibitionDetector] = hass.data.setdefault(DOMAIN, {}).setdefault(DATA_DETECTORS, {})
-    detectors[config.vtherm_unique_id] = detector
-    async_register_factory(hass)
-
     # Entities restore the last confirmed status and the bypass before start.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await detector.async_start()
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    await async_reload_vtherm(hass, config)
+    # Expose the detector to the core only once it is started: a core notified
+    # of the factory registration attaches the provider at once, and a detector
+    # without a confirmed status yet would withdraw the VTherm (UNKNOWN, with a
+    # precautionary stop) until its first evaluation.
+    detectors: dict[str, InhibitionDetector] = hass.data.setdefault(DOMAIN, {}).setdefault(DATA_DETECTORS, {})
+    detectors[config.vtherm_unique_id] = detector
+    async_register_factory(hass)
+
+    # A core that already attached the provider on the registration needs no
+    # reload (that would attach it a second time).
+    if not detector.providers:
+        await async_reload_vtherm(hass, config)
     return True
 
 

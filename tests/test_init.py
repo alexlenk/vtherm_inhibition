@@ -118,6 +118,32 @@ async def test_vtherm_before_plugin(hass: HomeAssistant, vtherm, fake_core, setu
     assert vtherm.state is ConfigEntryState.LOADED
 
 
+async def test_core_attaching_on_registration(
+    hass: HomeAssistant, vtherm, fake_core, thermostat, setup_plugin, monkeypatch
+) -> None:
+    """A core attaching the provider as soon as the factory is registered (the real
+    core does) gets a started detector and its confirmed status, and the VTherm is
+    not reloaded (no second attachment)."""
+    statuses_at_registration: list[InhibitionStatus] = []
+    original = VThermAPI.register_inhibition_provider_factory
+
+    def _register_and_attach(api: VThermAPI, factory) -> None:
+        original(api, factory)
+        detector = hass.data[DOMAIN][DATA_DETECTORS][VT_UNIQUE_ID]
+        statuses_at_registration.append(detector.status)
+        hass.async_create_task(fake_core.attach(thermostat), eager_start=True)
+
+    monkeypatch.setattr(VThermAPI, "register_inhibition_provider_factory", _register_and_attach)
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER])
+
+    assert statuses_at_registration == [INACTIVE]
+    assert fake_core.attach_count == 1
+    assert fake_core.statuses[VT_UNIQUE_ID] is INACTIVE
+    assert fake_core.transitions == []
+    assert len(entry.runtime_data.providers) == 1
+
+
 async def test_plugin_before_vtherm_at_startup(hass: HomeAssistant, fake_core, thermostat, setup_plugin) -> None:
     """During startup the plugin does not reload anything; the core discovers it."""
     hass.set_state(CoreState.starting)
