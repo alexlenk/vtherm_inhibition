@@ -1,0 +1,11 @@
+[project]
+name = "vtherm-inhibition"
+version = "0.1.0"
+description = "Inhibition (controlled withdrawal) provider plugin for Versatile Thermostat"
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
