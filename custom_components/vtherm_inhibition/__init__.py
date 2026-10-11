@@ -12,9 +12,10 @@ from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from vtherm_api import VThermAPI
 from vtherm_api.log_collector import get_vtherm_logger
 
-from .const import DATA_DETECTORS, DOMAIN, PLATFORMS, VT_DOMAIN
+from .const import DATA_DETECTORS, DATA_FACTORY, DOMAIN, PLATFORMS, PROVIDER_NAME, VT_DOMAIN
 from .detector import InhibitionDetector
 from .factory import async_register_factory, async_unregister_factory
 from .models import InhibitionConfig
@@ -22,6 +23,17 @@ from .models import InhibitionConfig
 _LOGGER = get_vtherm_logger(__name__)
 
 type InhibitionConfigEntry = ConfigEntry[InhibitionDetector]
+
+_BASE_REGISTER = VThermAPI.register_inhibition_provider_factory
+
+
+def _core_attaches_on_registration(api: VThermAPI) -> bool:
+    """True when the API in use is a core that attaches providers on registration.
+
+    The Versatile Thermostat core overrides ``register_inhibition_provider_factory``
+    to notify the started VTherms (late plugin); the bare ``vtherm_api`` does not.
+    """
+    return getattr(type(api), "register_inhibition_provider_factory", None) is not _BASE_REGISTER
 
 
 def _vtherm_config_entry_id(hass: HomeAssistant, config: InhibitionConfig) -> str | None:
@@ -79,12 +91,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -
     # precautionary stop) until its first evaluation.
     detectors: dict[str, InhibitionDetector] = hass.data.setdefault(DOMAIN, {}).setdefault(DATA_DETECTORS, {})
     detectors[config.vtherm_unique_id] = detector
-    async_register_factory(hass)
+    api = VThermAPI.get_vtherm_api(hass)
+    before = api.get_inhibition_provider_factory(PROVIDER_NAME) if api is not None else None
+    registered = async_register_factory(hass)
+    newly_registered = registered and before is not hass.data[DOMAIN].get(DATA_FACTORY)
 
-    # A core that already attached the provider on the registration needs no
-    # reload (that would attach it a second time).
-    if not detector.providers:
-        await async_reload_vtherm(hass, config)
+    # A core notified of a new registration attaches the provider itself (its
+    # notification task may not have run yet): a reload would attach it a
+    # second time. Otherwise (factory already registered for another entry,
+    # or no notifying core) the VTherm is reloaded to discover the provider.
+    if detector.providers or (newly_registered and api is not None and _core_attaches_on_registration(api)):
+        return True
+    await async_reload_vtherm(hass, config)
     return True
 
 
@@ -129,7 +147,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) 
         async_unregister_factory(hass)
 
     if entry.disabled_by is not None:
-        hass.async_create_task(async_reload_vtherm(hass, detector.config), f"{DOMAIN} release VTherm")
+        # Not eager: the VTherm reload must start after this unload has returned.
+        hass.async_create_task(
+            async_reload_vtherm(hass, detector.config), f"{DOMAIN} release VTherm", eager_start=False
+        )
     return True
 
 

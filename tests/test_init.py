@@ -144,6 +144,48 @@ async def test_core_attaching_on_registration(
     assert len(entry.runtime_data.providers) == 1
 
 
+async def test_core_attaching_later_on_registration(
+    hass: HomeAssistant, vtherm, fake_core, thermostat, setup_plugin, monkeypatch
+) -> None:
+    """A notifying core whose attach task has not run yet when setup checks
+    (it suspends first) must not get an additional VTherm reload."""
+    original = VThermAPI.register_inhibition_provider_factory
+
+    def _register_and_attach_later(api: VThermAPI, factory) -> None:
+        original(api, factory)
+        hass.async_create_task(fake_core.attach(thermostat), eager_start=False)
+
+    monkeypatch.setattr(VThermAPI, "register_inhibition_provider_factory", _register_and_attach_later)
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+
+    assert fake_core.attach_count == 1
+    assert fake_core.statuses[VT_UNIQUE_ID] is ACTIVE
+    assert len(entry.runtime_data.providers) == 1
+
+
+async def test_second_entry_reloads_its_vtherm(hass: HomeAssistant, vtherm, fake_core, thermostat, setup_plugin, monkeypatch) -> None:
+    """With a notifying core, an entry added while the factory is already
+    registered (another entry) still reloads its own VTherm."""
+    original = VThermAPI.register_inhibition_provider_factory
+    calls: list[str] = []
+
+    def _register(api: VThermAPI, factory) -> None:
+        calls.append("register")
+        original(api, factory)
+
+    monkeypatch.setattr(VThermAPI, "register_inhibition_provider_factory", _register)
+    hass.states.async_set(HEATER, "off")
+    await setup_plugin([HEATER], unique_id="vt-kitchen-uid", entity_id="climate.kitchen")
+    assert calls == ["register"]
+    assert fake_core.attach_count == 0  # no kitchen VTherm loaded, nothing attached
+
+    await setup_plugin([HEATER])
+    assert calls == ["register"]
+    assert fake_core.attach_count == 1  # bathroom VTherm reloaded
+    assert fake_core.statuses[VT_UNIQUE_ID] is INACTIVE
+
+
 async def test_plugin_before_vtherm_at_startup(hass: HomeAssistant, fake_core, thermostat, setup_plugin) -> None:
     """During startup the plugin does not reload anything; the core discovers it."""
     hass.set_state(CoreState.starting)
