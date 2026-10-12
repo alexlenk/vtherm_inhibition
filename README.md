@@ -73,10 +73,10 @@ Any missing or invalid value is treated as `turn_off`. The policy is also applie
 ## Prerequisites
 
 - Home Assistant 2026.7.1 or later.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ the first release including #2087 (inhibition providers)**. Versatile Thermostat 10.5.1 and older do not support inhibition providers.
-- `vtherm_api` **≥ 0.6.0** (installed automatically).
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ the first release including [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)** (inhibition providers, issue #2087), not released yet. Versatile Thermostat 10.5.1 and older do not support inhibition providers.
+- `vtherm_api` **≥ 0.6.0** (released on PyPI, installed automatically).
 
-The plugin cannot work before those versions are released. With an older Versatile Thermostat, the entry fails to set up with an explicit error and a repair issue explains the minimum versions; the VTherms are left untouched. While Versatile Thermostat is not loaded yet, the setup is retried.
+The plugin cannot work before that Versatile Thermostat release. With an older Versatile Thermostat, the entry fails to set up with an explicit error and a repair issue explains the minimum versions; the VTherms are left untouched. While Versatile Thermostat is not loaded yet, the setup is retried.
 
 ## Installation
 
@@ -148,7 +148,7 @@ Attributes of the binary sensor:
 - At Home Assistant startup, VTherm discovers the factory itself (its `async_startup` runs after Home Assistant has started).
 - When an entry is added or re-enabled while Home Assistant is running, the plugin first starts watching its sources, then registers the factory: VTherm attaches the provider at once and gets a confirmed status right away. If VTherm has not created a provider for it shortly after (factory already registered for another entry, or a core that does not attach on registration), the plugin reloads the targeted VTherm instead so that it attaches the provider.
 - **Options change**: applied in place to the running entry; the provider stays attached and reports nothing unless its confirmed status really changes. A raw status change caused by the new sources or HVAC modes follows the normal rules (activation/deactivation delay, grace period). A timer already running keeps its start time and its deadline follows the new delay (confirmed at once if already elapsed). A policy-only change reports nothing: VTherm reads the policy when an inhibition starts and keeps the one captured at entry until the exit. Entities reflect the new settings immediately.
-- When an entry is unloaded or reloaded (e.g. **Reload** in the UI), the attached provider reports `unknown` before it detaches: VTherm stays safely withdrawn until a provider confirms `inactive`. When an entry is **deleted or disabled**, the VTherm is reloaded without provider and works as before.
+- When an entry is unloaded or reloaded (e.g. **Reload** in the UI), the attached provider delivers `unknown` to VTherm and waits until VTherm has handled it, then detaches; only then is the factory unregistered: VTherm stays safely withdrawn until a provider confirms `inactive`. When an entry is **deleted or disabled**, the VTherm is reloaded without provider and works as before.
 - Consequence for a VTherm that is **not** inhibited at that moment: with the `turn_off` policy, this `unknown` makes VTherm send its precautionary stop, so the device is turned off briefly and back on once the new provider confirms `inactive` (reload) or once the VTherm is reloaded without provider (deletion, disabling). Saving the options does not do this.
 
 ## Limitations

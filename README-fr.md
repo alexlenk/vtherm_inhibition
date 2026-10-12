@@ -73,10 +73,10 @@ Une valeur absente ou invalide vaut `turn_off`. La politique s'applique aussi à
 ## Prérequis
 
 - Home Assistant 2026.7.1 ou supérieur.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ la première version incluant #2087 (fournisseurs d'inhibition)**. Versatile Thermostat 10.5.1 et antérieures ne prennent pas en charge les fournisseurs d'inhibition.
-- `vtherm_api` **≥ 0.6.0** (installé automatiquement).
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ la première version incluant [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)** (fournisseurs d'inhibition, issue #2087), pas encore publiée. Versatile Thermostat 10.5.1 et antérieures ne prennent pas en charge les fournisseurs d'inhibition.
+- `vtherm_api` **≥ 0.6.0** (publié sur PyPI, installé automatiquement).
 
-Le plugin ne peut pas fonctionner avant la publication de ces versions. Avec un Versatile Thermostat plus ancien, l'entrée échoue avec une erreur explicite et une réparation indique les versions minimales ; les VTherm ne sont pas touchés. Tant que Versatile Thermostat n'est pas chargé, la mise en place est retentée.
+Le plugin ne peut pas fonctionner avant la publication de cette version de Versatile Thermostat. Avec un Versatile Thermostat plus ancien, l'entrée échoue avec une erreur explicite et une réparation indique les versions minimales ; les VTherm ne sont pas touchés. Tant que Versatile Thermostat n'est pas chargé, la mise en place est retentée.
 
 ## Installation
 
@@ -148,7 +148,7 @@ Attributs du capteur binaire :
 - Au démarrage de Home Assistant, VTherm découvre lui-même la fabrique (son `async_startup` s'exécute une fois Home Assistant démarré).
 - Lorsqu'une entrée est ajoutée ou réactivée alors que Home Assistant tourne, le plugin commence par surveiller ses sources, puis enregistre la fabrique : VTherm rattache aussitôt le fournisseur et obtient immédiatement un statut confirmé. Si VTherm n'a pas créé de fournisseur peu après (fabrique déjà enregistrée pour une autre entrée, ou cœur qui ne rattache pas à l'enregistrement), le plugin recharge plutôt le VTherm ciblé pour qu'il rattache le fournisseur.
 - **Modification des options** : appliquée à chaud à l'entrée en cours ; le fournisseur reste rattaché et ne transmet rien tant que son état confirmé ne change pas réellement. Un changement d'état brut dû aux nouvelles sources ou aux nouveaux modes HVAC suit les règles normales (délai d'activation/désactivation, délai de grâce). Une temporisation déjà en cours garde son heure de départ et son échéance suit le nouveau délai (confirmation immédiate s'il est déjà écoulé). Un changement de la seule politique ne transmet rien : VTherm lit la politique au début d'une inhibition et garde celle capturée à l'entrée jusqu'à la sortie. Les entités reflètent immédiatement les nouveaux réglages.
-- Au déchargement ou au rechargement d'une entrée (par exemple **Recharger** dans l'interface), le fournisseur rattaché transmet `unknown` avant de se détacher : VTherm reste retiré par prudence jusqu'à ce qu'un fournisseur confirme `inactive`. Lorsqu'une entrée est **supprimée ou désactivée**, le VTherm est rechargé sans fournisseur et fonctionne comme avant.
+- Au déchargement ou au rechargement d'une entrée (par exemple **Recharger** dans l'interface), le fournisseur rattaché transmet `unknown` à VTherm et attend que VTherm l'ait traité, puis se détache ; la fabrique n'est retirée qu'ensuite : VTherm reste retiré par prudence jusqu'à ce qu'un fournisseur confirme `inactive`. Lorsqu'une entrée est **supprimée ou désactivée**, le VTherm est rechargé sans fournisseur et fonctionne comme avant.
 - Conséquence pour un VTherm qui n'est **pas** inhibé à ce moment : avec la politique `turn_off`, ce `unknown` fait envoyer par VTherm son arrêt de précaution ; l'équipement est donc brièvement éteint puis rallumé dès que le nouveau fournisseur confirme `inactive` (rechargement) ou dès que le VTherm est rechargé sans fournisseur (suppression, désactivation). L'enregistrement des options ne le fait pas.
 
 ## Limites
