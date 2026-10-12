@@ -171,6 +171,7 @@ class RecordingProvider(VThermInhibitionProvider):
     """The real provider, recording the calls made by the core."""
 
     calls: ClassVar[list[str]] = []
+    stop_deliveries: ClassVar[list[int]] = []
 
     def post_init(self, entry_infos):
         self.calls.append("post_init")
@@ -194,7 +195,9 @@ class RecordingProvider(VThermInhibitionProvider):
 
     async def async_stop_listening(self):
         self.calls.append("async_stop_listening")
+        sequence = self.sequence
         await super().async_stop_listening()
+        self.stop_deliveries.append(self.sequence - sequence)
 
 
 @pytest.mark.parametrize("source_state", [STATE_OFF, STATE_ON])
@@ -215,16 +218,20 @@ async def test_core_call_order(hass: HomeAssistant, setup_bathroom, underlyings:
         sc.detector._unsubscribe()  # pylint: disable=protected-access
         hass.states.async_set(SOURCE, source_state)
         RecordingProvider.calls = []
+        RecordingProvider.stop_deliveries = []
         await _restart(hass, sc, underlyings, plugin_first=True)
 
     assert RecordingProvider.calls == [
-        "async_stop_listening",  # unload of the plugin entry
+        "async_stop_listening",  # unload of the plugin entry (delivers UNKNOWN)
+        "async_stop_listening",  # the core, on the factory unregistration (no-op)
         "post_init",
         "restore_state",  # previous VTherm state, startup only
         "register_transition_callback",
         "async_start_listening",
         "async_refresh_state",
     ]
+    # UNKNOWN is delivered once, by the plugin's own stop; the second stop is idempotent
+    assert RecordingProvider.stop_deliveries == [1, 0]
     assert_single_attachment(sc)
     if source_state == STATE_OFF:
         assert_running(sc)
