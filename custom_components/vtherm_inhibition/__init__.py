@@ -219,7 +219,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) 
     # status instead of the UNKNOWN caused by the stop.
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
-    detector.async_stop()
+    # Await UNKNOWN delivery to the core before the factory is unregistered.
+    await detector.async_stop()
 
     data = hass.data.get(DOMAIN, {})
     detectors: dict[str, InhibitionDetector] = data.get(DATA_DETECTORS, {})

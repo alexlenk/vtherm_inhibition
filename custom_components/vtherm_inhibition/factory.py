@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
-from vtherm_api import InterfaceThermostatRuntime, VThermAPI
+from vtherm_api import InterfaceInhibitionThermostatView, VThermAPI
 from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
 from vtherm_api.const import VTHERM_API_NAME
 from vtherm_api.log_collector import get_vtherm_logger
@@ -26,8 +26,12 @@ class InhibitionProviderFactory:
         """Return the stable factory name."""
         return PROVIDER_NAME
 
-    def _detector_for(self, thermostat: InterfaceThermostatRuntime) -> InhibitionDetector | None:
-        """Match the VTherm by unique_id (stable), by entity_id only without one."""
+    def _detector_for(self, thermostat: InterfaceInhibitionThermostatView) -> InhibitionDetector | None:
+        """Match the VTherm by unique_id (stable), by entity_id only without one.
+
+        Only the three fields of the view are read (unique_id, entity_id; name
+        is used by the provider for logs).
+        """
         detectors: dict[str, InhibitionDetector] = self._hass.data.get(DOMAIN, {}).get(DATA_DETECTORS, {})
         unique_id = getattr(thermostat, "unique_id", None)
         if unique_id:
@@ -39,11 +43,11 @@ class InhibitionProviderFactory:
                     return detector
         return None
 
-    def supports(self, thermostat: InterfaceThermostatRuntime) -> bool:
+    def supports(self, thermostat: InterfaceInhibitionThermostatView) -> bool:
         """Return True when a plugin entry targets this VTherm. Pure, no side effect."""
         return self._detector_for(thermostat) is not None
 
-    def create(self, thermostat: InterfaceThermostatRuntime) -> VThermInhibitionProvider:
+    def create(self, thermostat: InterfaceInhibitionThermostatView) -> VThermInhibitionProvider:
         """Create the provider bound to this VTherm's detector."""
         detector = self._detector_for(thermostat)
         if detector is None:

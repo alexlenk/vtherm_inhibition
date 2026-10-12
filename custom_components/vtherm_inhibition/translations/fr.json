@@ -103,13 +103,13 @@
       "message": "Versatile Thermostat n'est pas encore chargé."
     },
     "core_without_inhibition": {
-      "message": "Le Versatile Thermostat installé ne prend pas en charge les fournisseurs d'inhibition. Mettez-le à jour vers une version qui les inclut (issue #2087)."
+      "message": "Le Versatile Thermostat installé ne prend pas en charge les fournisseurs d'inhibition. Mettez-le à jour vers une version qui les inclut (jmcollin78/versatile_thermostat#2101)."
     }
   },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat sans prise en charge de l'inhibition",
-      "description": "VTherm Inhibition nécessite Versatile Thermostat avec la prise en charge des fournisseurs d'inhibition (première version incluant l'issue #2087) et vtherm_api 0.6.0 ou supérieur. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
+      "description": "VTherm Inhibition nécessite Versatile Thermostat avec la prise en charge des fournisseurs d'inhibition (première version incluant jmcollin78/versatile_thermostat#2101) et vtherm_api 0.6.0 ou supérieur. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
     },
     "missing_sources": {
       "title": "Sources d'inhibition manquantes",

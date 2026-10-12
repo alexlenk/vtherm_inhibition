@@ -103,13 +103,13 @@
       "message": "Versatile Thermostat is not loaded yet."
     },
     "core_without_inhibition": {
-      "message": "The installed Versatile Thermostat does not support inhibition providers. Update it to a release including inhibition providers (issue #2087)."
+      "message": "The installed Versatile Thermostat does not support inhibition providers. Update it to a release including inhibition providers (jmcollin78/versatile_thermostat#2101)."
     }
   },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat without inhibition support",
-      "description": "VTherm Inhibition needs Versatile Thermostat with inhibition provider support (the first release including issue #2087) and vtherm_api 0.6.0 or later. Update Versatile Thermostat, then restart Home Assistant."
+      "description": "VTherm Inhibition needs Versatile Thermostat with inhibition provider support (the first release including jmcollin78/versatile_thermostat#2101) and vtherm_api 0.6.0 or later. Update Versatile Thermostat, then restart Home Assistant."
     },
     "missing_sources": {
       "title": "Missing inhibition sources",

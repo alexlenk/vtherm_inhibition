@@ -19,7 +19,7 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
-from vtherm_api import InhibitionStatus, InhibitionTransition, VThermAPI
+from vtherm_api import InhibitionStatus, InhibitionThermostatView, InhibitionTransition, VThermAPI
 
 from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
@@ -99,10 +99,12 @@ class FakeCore:
 
     async def attach(self, thermostat: FakeThermostat) -> InhibitionStatus | None:
         api = VThermAPI.get_vtherm_api(self.hass)
+        # Like the core: factories only get the immutable identity snapshot.
+        view = InhibitionThermostatView.from_thermostat(thermostat)
         for factory in api.get_inhibition_provider_factories():
-            if not factory.supports(thermostat):
+            if not factory.supports(view):
                 continue
-            provider = factory.create(thermostat)
+            provider = factory.create(view)
             provider.post_init(thermostat.entry_infos)
             provider.restore_state(None)
             self.removers[thermostat.unique_id] = provider.register_transition_callback(self._on_transition)
@@ -115,10 +117,13 @@ class FakeCore:
         self.providers.pop(thermostat.unique_id, None)
         return None
 
-    def detach(self, thermostat: FakeThermostat) -> None:
+    async def detach(self, thermostat: FakeThermostat) -> None:
         provider = self.providers.pop(thermostat.unique_id, None)
         if provider is not None:
-            provider.stop_listening()
+            await provider.async_stop_listening()
+        remover = self.removers.pop(thermostat.unique_id, None)
+        if remover is not None:
+            remover()
 
 
 @pytest.fixture
@@ -146,7 +151,7 @@ async def vtherm(hass: HomeAssistant, fake_core: FakeCore, thermostat: FakeTherm
         return True
 
     async def async_unload_entry(hass_: HomeAssistant, entry: ConfigEntry) -> bool:
-        fake_core.detach(thermostat)
+        await fake_core.detach(thermostat)
         return True
 
     mock_integration(
@@ -264,7 +269,7 @@ def attach(hass: HomeAssistant, thermostat: FakeThermostat):
     from custom_components.vtherm_inhibition.factory import InhibitionProviderFactory
 
     async def _attach(target: FakeThermostat | None = None):
-        provider = InhibitionProviderFactory(hass).create(target or thermostat)
+        provider = InhibitionProviderFactory(hass).create(InhibitionThermostatView.from_thermostat(target or thermostat))
         recorder = Recorder()
         provider.register_transition_callback(recorder)
         await provider.async_start_listening()

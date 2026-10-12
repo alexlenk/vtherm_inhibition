@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from vtherm_api import (
     InhibitionStatus,
     InhibitionStopPolicy,
+    InhibitionThermostatView,
     InterfaceInhibitionProvider,
     InterfaceInhibitionProviderFactory,
 )
@@ -53,8 +54,7 @@ async def test_transition_content_and_sequence(hass: HomeAssistant, setup_plugin
     assert all(t.timestamp.tzinfo is not None for t in rec.transitions)
     assert provider.sequence == 4
 
-    provider.stop_listening()
-    await hass.async_block_till_done()
+    await provider.async_stop_listening()
     assert rec.transitions[-1].sequence == 5
     assert rec.transitions[-1].new_status is UNKNOWN
     assert rec.transitions[-1].old_status is ACTIVE
@@ -125,15 +125,25 @@ async def test_remove_callback(hass: HomeAssistant, setup_plugin, attach) -> Non
     assert rec.statuses == [ACTIVE]
 
 
-async def test_stop_listening_reports_unknown_before_detach(hass: HomeAssistant, setup_plugin, attach) -> None:
-    """stop_listening: UNKNOWN delivered (eagerly), then nothing more."""
+async def test_stop_listening_awaits_unknown_before_detach(hass: HomeAssistant, setup_plugin, attach) -> None:
+    """async_stop_listening: UNKNOWN delivered and awaited, then nothing more."""
     hass.states.async_set(HEATER, "on")
     entry = await setup_plugin([HEATER])
     provider, rec = await attach()
     assert provider in entry.runtime_data.providers
+    events: list[str] = []
 
-    provider.stop_listening()
-    # Delivered synchronously when the callback does not block.
+    async def slow_core(transition) -> None:
+        events.append("callback-start")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        events.append(f"callback-end-{transition.new_status}")
+
+    provider.register_transition_callback(slow_core)
+    await provider.async_stop_listening()
+    events.append("stopped")
+    # The callback was completely awaited before the stop returned.
+    assert events == ["callback-start", "callback-end-unknown", "stopped"]
     assert rec.statuses == [UNKNOWN]
     assert provider.status is UNKNOWN
     assert provider.is_listening is False
@@ -141,9 +151,26 @@ async def test_stop_listening_reports_unknown_before_detach(hass: HomeAssistant,
     assert await provider.async_refresh_state() is UNKNOWN
 
     await _toggle(hass, "off", "on")
-    provider.stop_listening()  # idempotent: callbacks already detached
-    await hass.async_block_till_done()
+    await provider.async_stop_listening()  # idempotent: callbacks already detached
     assert rec.statuses == [UNKNOWN]
+
+
+async def test_stop_listening_failing_callback(hass: HomeAssistant, setup_plugin, attach, caplog) -> None:
+    """A callback raising during the stop does not prevent the others nor the detach."""
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    provider, _ = await attach()
+
+    async def broken(transition) -> None:
+        raise RuntimeError("boom")
+
+    rec2 = Recorder()
+    provider.register_transition_callback(broken)
+    provider.register_transition_callback(rec2)
+    await provider.async_stop_listening()
+    assert rec2.statuses == [UNKNOWN]
+    assert provider not in entry.runtime_data.providers
+    assert "transition callback failed" in caplog.text
 
 
 async def test_stop_listening_without_callbacks(hass: HomeAssistant, setup_plugin) -> None:
@@ -151,11 +178,10 @@ async def test_stop_listening_without_callbacks(hass: HomeAssistant, setup_plugi
     hass.states.async_set(HEATER, "on")
     await setup_plugin([HEATER])
     provider = InhibitionProviderFactory(hass).create(
-        type("T", (), {"unique_id": "vt-bathroom-uid", "entity_id": "climate.bathroom", "name": "B"})()
+        InhibitionThermostatView("climate.bathroom", "B", "vt-bathroom-uid")
     )
     await provider.async_start_listening()
-    provider.stop_listening()
-    await hass.async_block_till_done()
+    await provider.async_stop_listening()
     assert provider.sequence == 0
     assert provider.status is UNKNOWN
 
@@ -165,7 +191,7 @@ async def test_restart_after_stop(hass: HomeAssistant, setup_plugin, attach) -> 
     hass.states.async_set(HEATER, "on")
     await setup_plugin([HEATER])
     provider, rec = await attach()
-    provider.stop_listening()
+    await provider.async_stop_listening()
     rec2 = Recorder()
     provider.register_transition_callback(rec2)
     await provider.async_start_listening()
@@ -181,7 +207,7 @@ async def test_no_transition_before_start(hass: HomeAssistant, setup_plugin, the
     """A created but not started provider receives no transition."""
     hass.states.async_set(HEATER, "off")
     await setup_plugin([HEATER])
-    provider = InhibitionProviderFactory(hass).create(thermostat)
+    provider = InhibitionProviderFactory(hass).create(InhibitionThermostatView.from_thermostat(thermostat))
     rec = Recorder()
     provider.register_transition_callback(rec)
     await _toggle(hass, "on")

@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from vtherm_api import InhibitionStatus, VThermAPI
+from vtherm_api import InhibitionStatus, InhibitionThermostatView, VThermAPI
 
 from custom_components.vtherm_inhibition.const import (
     CONF_PHYSICAL_STOP_POLICY,
@@ -19,7 +19,7 @@ from custom_components.vtherm_inhibition.const import (
 )
 from custom_components.vtherm_inhibition.factory import InhibitionProviderFactory, async_register_factory
 
-from .conftest import VT_UNIQUE_ID, FakeThermostat, plugin_entry
+from .conftest import VT_UNIQUE_ID, plugin_entry
 
 ACTIVE = InhibitionStatus.ACTIVE
 INACTIVE = InhibitionStatus.INACTIVE
@@ -40,20 +40,20 @@ async def test_factory_supports_and_create(hass: HomeAssistant, setup_plugin, th
     entry = await setup_plugin([HEATER])
     factory = InhibitionProviderFactory(hass)
     assert factory.name == PROVIDER_NAME
-    assert factory.supports(thermostat) is True
-    assert factory.create(thermostat).status is INACTIVE
+    assert factory.supports(InhibitionThermostatView.from_thermostat(thermostat)) is True
+    assert factory.create(InhibitionThermostatView.from_thermostat(thermostat)).status is INACTIVE
 
-    other = FakeThermostat(hass, "other-uid", "climate.bathroom")  # same entity_id, other VTherm
+    other = InhibitionThermostatView("climate.bathroom", "Other", "other-uid")  # same entity_id, other VTherm
     assert factory.supports(other) is False
     with pytest.raises(ValueError):
         factory.create(other)
 
     # Without unique_id, fall back to the entity_id.
-    assert factory.supports(FakeThermostat(hass, "", "climate.bathroom")) is True
-    assert factory.supports(FakeThermostat(hass, "", "climate.kitchen")) is False
+    assert factory.supports(InhibitionThermostatView("climate.bathroom", "B", "")) is True
+    assert factory.supports(InhibitionThermostatView("climate.kitchen", "K", "")) is False
 
     await hass.config_entries.async_unload(entry.entry_id)
-    assert factory.supports(thermostat) is False
+    assert factory.supports(InhibitionThermostatView.from_thermostat(thermostat)) is False
 
 
 async def test_factory_registered_once_and_unregistered_with_last_entry(hass: HomeAssistant, setup_plugin) -> None:
@@ -584,3 +584,33 @@ async def test_fallback_device_removed_when_vtherm_device_exists(hass: HomeAssis
     sensor = er.async_get(hass).async_get("binary_sensor.bathroom_inhibition")
     assert sensor is not None
     assert sensor.device_id == device.id
+
+
+async def test_unload_awaits_unknown_before_unregistering(
+    hass: HomeAssistant, vtherm, fake_core, setup_plugin, monkeypatch
+) -> None:
+    """The core has received (and finished handling) UNKNOWN when the factory is unregistered."""
+    import asyncio
+
+    from .conftest import FakeCoreAPI
+
+    seen_at_unregister: list[list[InhibitionStatus]] = []
+    handled: list[str] = []
+
+    async def slow_core_callback(transition) -> None:
+        await asyncio.sleep(0)
+        handled.append(str(transition.new_status))
+
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    fake_core.providers[VT_UNIQUE_ID].register_transition_callback(slow_core_callback)
+
+    original = FakeCoreAPI.unregister_inhibition_provider_factory
+
+    def _unregister(api, name: str) -> None:
+        seen_at_unregister.append(list(handled))
+        original(api, name)
+
+    monkeypatch.setattr(FakeCoreAPI, "unregister_inhibition_provider_factory", _unregister)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert seen_at_unregister == [["unknown"]]

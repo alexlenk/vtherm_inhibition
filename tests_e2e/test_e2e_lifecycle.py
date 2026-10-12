@@ -192,9 +192,9 @@ class RecordingProvider(VThermInhibitionProvider):
         self.calls.append("async_refresh_state")
         return await super().async_refresh_state()
 
-    def stop_listening(self):
-        self.calls.append("stop_listening")
-        super().stop_listening()
+    async def async_stop_listening(self):
+        self.calls.append("async_stop_listening")
+        await super().async_stop_listening()
 
 
 @pytest.mark.parametrize("source_state", [STATE_OFF, STATE_ON])
@@ -212,14 +212,13 @@ async def test_core_call_order(hass: HomeAssistant, setup_bathroom, underlyings:
             "async_refresh_state",
         ]
         # the source changes while Home Assistant is down
-        sc.detector._unsub_sources()  # pylint: disable=protected-access
-        sc.detector._unsub_sources = None  # pylint: disable=protected-access
+        sc.detector._unsubscribe()  # pylint: disable=protected-access
         hass.states.async_set(SOURCE, source_state)
         RecordingProvider.calls = []
         await _restart(hass, sc, underlyings, plugin_first=True)
 
     assert RecordingProvider.calls == [
-        "stop_listening",  # unload of the plugin entry
+        "async_stop_listening",  # unload of the plugin entry
         "post_init",
         "restore_state",  # previous VTherm state, startup only
         "register_transition_callback",

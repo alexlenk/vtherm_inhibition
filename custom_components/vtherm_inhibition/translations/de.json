@@ -103,13 +103,13 @@
       "message": "Versatile Thermostat ist noch nicht geladen."
     },
     "core_without_inhibition": {
-      "message": "Das installierte Versatile Thermostat unterstützt keine Sperr-Provider. Aktualisiere es auf eine Version mit Sperr-Providern (Issue #2087)."
+      "message": "Das installierte Versatile Thermostat unterstützt keine Sperr-Provider. Aktualisiere es auf eine Version mit Sperr-Providern (jmcollin78/versatile_thermostat#2101)."
     }
   },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat ohne Sperr-Unterstützung",
-      "description": "VTherm-Sperre benötigt Versatile Thermostat mit Unterstützung für Sperr-Provider (erste Version mit Issue #2087) und vtherm_api 0.6.0 oder neuer. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
+      "description": "VTherm-Sperre benötigt Versatile Thermostat mit Unterstützung für Sperr-Provider (erste Version mit jmcollin78/versatile_thermostat#2101) und vtherm_api 0.6.0 oder neuer. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
     },
     "missing_sources": {
       "title": "Fehlende Sperrquellen",

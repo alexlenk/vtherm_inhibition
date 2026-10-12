@@ -12,6 +12,7 @@ from vtherm_api import (
     InhibitionStopPolicy,
     InhibitionTransition,
     InhibitionTransitionCallback,
+    InterfaceInhibitionThermostatView,
 )
 from vtherm_api.log_collector import get_vtherm_logger
 
@@ -25,7 +26,7 @@ class VThermInhibitionProvider:
     """Thin adapter publishing the detector's confirmed status to the core.
 
     * ``status`` is the detector's confirmed status, or ``UNKNOWN`` once
-      ``stop_listening`` has been called.
+      ``async_stop_listening`` has been called.
     * Each confirmed change produces one ``InhibitionTransition`` with a
       ``sequence`` that is strictly increasing per provider instance.
       Repeated statuses produce nothing.
@@ -36,7 +37,7 @@ class VThermInhibitionProvider:
       the others nor later transitions.
     """
 
-    def __init__(self, detector: InhibitionDetector, thermostat: Any) -> None:
+    def __init__(self, detector: InhibitionDetector, thermostat: InterfaceInhibitionThermostatView) -> None:
         self._detector = detector
         self._hass = detector.hass
         self._thermostat_name = str(getattr(thermostat, "name", None) or detector.config.vtherm_entity_id)
@@ -93,22 +94,21 @@ class VThermInhibitionProvider:
         # Report a change that happened while detached (e.g. after a stop).
         self.on_confirmed_status(self._detector.status)
 
-    @callback
-    def stop_listening(self) -> None:
-        """Report ``UNKNOWN`` to the registered callbacks, then detach them."""
-        self._detector.detach_provider(self)
+    async def async_stop_listening(self) -> None:
+        """Deliver ``UNKNOWN`` to the registered callbacks and await them,
+        then detach them and unsubscribe from the detector.
+
+        No later transition reaches the callbacks once this has started.
+        Idempotent: a second call has no callback left and does nothing.
+        """
         self._listening = False
         self._stopped = True
         callbacks = list(self._callbacks)
         self._callbacks.clear()
         if callbacks:
-            transition = self._next_transition(InhibitionStatus.UNKNOWN)
-            self._hass.async_create_task(
-                self._async_dispatch(transition, callbacks),
-                f"{PROVIDER_NAME} stop",
-                eager_start=True,
-            )
+            await self._async_dispatch(self._next_transition(InhibitionStatus.UNKNOWN), callbacks)
         self._last_reported = InhibitionStatus.UNKNOWN
+        self._detector.detach_provider(self)
         _LOGGER.debug("%s - stopped listening", self)
 
     def restore_state(self, old_state: Any) -> None:

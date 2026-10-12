@@ -314,15 +314,15 @@ class InhibitionDetector:
         self._timer_until = deadline
         self._timer_cancel = async_call_later(self._hass, (deadline - now).total_seconds(), self._timer_job)
 
-    @callback
-    def async_stop(self) -> None:
-        """Stop listening; every attached provider reports ``UNKNOWN`` first."""
-        for provider in list(self._providers):
-            provider.stop_listening()
-        self._providers.clear()
+    async def async_stop(self) -> None:
+        """Stop the sources, then await every attached provider's ``UNKNOWN``."""
+        # No new transition can start once the sources and timers are stopped.
         self._cancel_timer()
         self._unsubscribe()
         self._started = False
+        for provider in list(self._providers):
+            await provider.async_stop_listening()
+        self._providers.clear()
         self._unavailable_since = None
         self._status = InhibitionStatus.UNKNOWN
         self._raw = InhibitionStatus.UNKNOWN
