@@ -1,0 +1,69 @@
+name: End-to-end tests
+
+# Runs tests_e2e/ against a checkout of the Versatile Thermostat core.
+#
+# By default the core is jmcollin78/versatile_thermostat at main. Until the
+# inhibition core (issue #2087, PR #2101) is merged and released, run this
+# workflow manually ("Run workflow") with core_repository
+# alexlenk/versatile_thermostat and core_ref feat/2087-inhibition-core.
+# The job is continue-on-error until a Versatile Thermostat release with
+# inhibition exists: a core without inhibition makes these tests fail, which
+# must not block the plugin's CI.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      core_repository:
+        description: "Versatile Thermostat repository (owner/name)"
+        required: false
+        default: "jmcollin78/versatile_thermostat"
+      core_ref:
+        description: "Branch, tag or commit of the core"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # Remove once the first Versatile Thermostat release with inhibition (#2087) exists.
+    continue-on-error: true
+    env:
+      CORE_REPOSITORY: ${{ inputs.core_repository || 'jmcollin78/versatile_thermostat' }}
+      CORE_REF: ${{ inputs.core_ref || 'main' }}
+
+    steps:
+      - name: Checkout the plugin
+        uses: actions/checkout@v4
+
+      - name: Checkout the Versatile Thermostat core
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_REPOSITORY }}
+          ref: ${{ env.CORE_REF }}
+          path: core
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.14
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip3 install -r core/requirements_test.txt
+          pip3 install -r requirements_test.txt
+
+      - name: Run the end-to-end tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          VTHERM_CORE_PATH: ${{ github.workspace }}/core
+        run: |
+          test -f core/custom_components/versatile_thermostat/manifest.json
+          pytest -q --timeout=60 -p no:sugar tests_e2e
