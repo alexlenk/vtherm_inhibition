@@ -74,11 +74,11 @@ L'option est transmise à `set_inhibition` au début d'une inhibition. La modifi
 ## Appels à Versatile Thermostat
 
 - Le VTherm est identifié par son identifiant unique stable, résolu à chaque appel en son entity ID **courant** : un renommage de l'entité du VTherm est suivi (l'entrée est mise à jour).
-- Les appels ne sont faits que lorsque le VTherm est disponible : son entité existe et a démarré (attribut d'état `is_ready: true`). Appeler plus tôt ferait ignorer par le cœur l'état d'inhibition qu'il restaure après un redémarrage. Tant que le VTherm n'est pas disponible, l'appel en attente est signalé par l'attribut `retry_pending` et effectué dès qu'il l'est.
+- Les appels sont faits dès que l'entité du VTherm existe, sans attendre la fin de son démarrage : le cœur fusionne un `set_inhibition` précoce avec l'état d'inhibition qu'il restaure après un redémarrage (pas de second arrêt d'entrée) et ferme aussitôt sa garde des commandes (pas de chauffe au démarrage). Tant que l'entité du VTherm n'existe pas, l'appel en attente est signalé par l'attribut `retry_pending` et effectué dès qu'elle apparaît.
 - À chaque fois que le VTherm devient disponible (démarrage de Home Assistant, rechargement du VTherm) et à chaque mise en place de l'entrée du plugin (rechargement, redémarrage), l'appel correspondant à l'état courant est refait : `set_inhibition` est idempotent dans le cœur (pas de second arrêt) et `unset_inhibition` ne fait rien hors inhibition.
 - Des états demandant le même appel (`active` ↔ `unknown`) ne déclenchent pas de nouvel appel.
 - Les appels ne se chevauchent jamais : un changement d'état pendant un appel est appliqué juste après.
-- **Échecs et nouvelles tentatives** : lorsqu'un appel échoue (par exemple le cœur n'a pas pu réconcilier les équipements à la sortie de l'inhibition : il lève une erreur et garde le VTherm inhibé), il est retenté après 30 s, 60 s, 120 s, puis toutes les 5 minutes, tant que l'état demande toujours le même appel. Un changement d'état annule la tentative et effectue le nouvel appel. Un Versatile Thermostat sans prise en charge de l'inhibition refuse l'appel : une réparation est créée et l'appel est refait au redémarrage du VTherm.
+- **Échecs et nouvelles tentatives** : lorsqu'un appel échoue (par exemple le cœur n'a pas pu réconcilier les équipements à la sortie de l'inhibition : il lève une erreur et garde le VTherm inhibé), il est retenté après 30 s, 60 s, 120 s, puis toutes les 5 minutes, tant que l'état demande toujours le même appel. Un changement d'état annule la tentative et effectue le nouvel appel. Si `unset_inhibition` échoue encore après la 3e nouvelle tentative, une réparation signale que le VTherm reste inhibé ; elle disparaît en cas de succès ou de changement d'état. Un Versatile Thermostat sans prise en charge de l'inhibition refuse l'appel : une réparation est créée et l'appel est refait au redémarrage du VTherm.
 
 ## Prérequis
 
@@ -154,7 +154,7 @@ Attributs du capteur binaire :
 | `unavailable_since` | Début de l'épisode d'indisponibilité en cours (UTC), `null` hors épisode. |
 | `missing_sources` | Sources configurées qui n'existent plus. |
 | `vtherm_entity_id` | Entity ID courant du VTherm ciblé. |
-| `vtherm_available` | `true` tant que le VTherm existe et a démarré. |
+| `vtherm_available` | `true` tant que l'entité du VTherm existe. |
 | `last_api_call`, `last_api_call_at` | Dernier appel effectué (`set` ou `unset`) et quand (UTC). |
 | `last_error` | Erreur du dernier appel, `null` dès qu'un appel a réussi. |
 | `retry_pending` | `true` tant que l'appel correspondant à l'état n'a pas encore réussi (VTherm indisponible ou nouvelle tentative programmée). |
@@ -168,7 +168,7 @@ Versatile Thermostat publie de son côté l'attribut `specific_states.inhibition
 - **Rechargement de l'entrée ou redémarrage de Home Assistant** : le déchargement ne fait aucun appel, un VTherm inhibé reste donc inhibé. À sa remise en place, l'entrée restaure son état et son contournement et refait l'appel correspondant dès que le VTherm est disponible.
 - **Entrée déchargée ou désactivée** : aucun appel ; un VTherm inhibé **reste inhibé** (un déchargement ne signifie jamais `inactive`). Allumez le contournement avant de désactiver l'entrée si le VTherm doit reprendre, ou supprimez l'entrée.
 - **Entrée supprimée** : `unset_inhibition` est appelé, le VTherm est libéré et fonctionne comme avant (si Versatile Thermostat ne tourne pas à ce moment, un avertissement est journalisé ; voir ci-dessous).
-- **Rechargement du VTherm** : le cœur restaure son état d'inhibition ; le plugin refait l'appel correspondant dès que le VTherm a démarré.
+- **Rechargement du VTherm** : le cœur restaure son état d'inhibition ; le plugin refait l'appel correspondant dès que l'entité du VTherm est de retour.
 
 ### Récupération si le plugin est supprimé pendant qu'un VTherm est inhibé
 

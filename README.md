@@ -74,11 +74,11 @@ The option is passed to `set_inhibition` when an inhibition starts. Changing it 
 ## Calls to Versatile Thermostat
 
 - The VTherm is identified by its stable unique ID and resolved to its **current** entity ID at every call: renaming the VTherm entity is followed (the entry is updated).
-- Calls are only made while the VTherm is available: its entity exists and has started (state attribute `is_ready: true`). Calling earlier would make the core skip the inhibition state it restores after a restart. While the VTherm is not available, the pending call is shown by the `retry_pending` attribute and made as soon as it is.
+- Calls are made as soon as the VTherm entity exists, without waiting for the VTherm to finish starting: the core merges an early `set_inhibition` with the inhibition state it restores after a restart (no second entry stop) and closes its command gate at once (no heating at startup). While the VTherm entity does not exist, the pending call is shown by the `retry_pending` attribute and made as soon as it appears.
 - Each time the VTherm becomes available (Home Assistant start, VTherm reload) and each time the plugin entry is set up (reload, restart), the call matching the current status is made again: `set_inhibition` is idempotent in the core (no second stop) and `unset_inhibition` does nothing outside an inhibition.
 - Statuses asking for the same call (`active` ↔ `unknown`) make no new call.
 - Calls never overlap: a status change during a call is applied right after it.
-- **Failures and retries**: when a call fails (for example the core could not reconcile the devices when leaving the inhibition: it raises and keeps the VTherm inhibited), it is retried after 30 s, 60 s, 120 s, then every 5 minutes, as long as the status still asks for the same call. A status change cancels the retry and makes the new call. A Versatile Thermostat without inhibition support refuses the call: a repair issue is raised and the call is made again when the VTherm restarts.
+- **Failures and retries**: when a call fails (for example the core could not reconcile the devices when leaving the inhibition: it raises and keeps the VTherm inhibited), it is retried after 30 s, 60 s, 120 s, then every 5 minutes, as long as the status still asks for the same call. A status change cancels the retry and makes the new call. If `unset_inhibition` still fails after the 3rd retry, a repair issue tells that the VTherm stays inhibited; it disappears on success or when the status changes. A Versatile Thermostat without inhibition support refuses the call: a repair issue is raised and the call is made again when the VTherm restarts.
 
 ## Prerequisites
 
@@ -154,7 +154,7 @@ Attributes of the binary sensor:
 | `unavailable_since` | Start of the current unavailability episode (UTC), `null` outside one. |
 | `missing_sources` | Configured sources that no longer exist. |
 | `vtherm_entity_id` | Current entity ID of the targeted VTherm. |
-| `vtherm_available` | `true` while the VTherm exists and has started. |
+| `vtherm_available` | `true` while the VTherm entity exists. |
 | `last_api_call`, `last_api_call_at` | Last call made (`set` or `unset`) and when (UTC). |
 | `last_error` | Error of the last call, `null` once a call succeeded. |
 | `retry_pending` | `true` while the call matching the status has not succeeded yet (VTherm not available, or retry scheduled). |
@@ -168,7 +168,7 @@ Versatile Thermostat publishes its own side under the `specific_states.inhibitio
 - **Entry reload or Home Assistant restart**: unloading makes no call, so an inhibited VTherm stays inhibited. When the entry is set up again it restores its status and bypass and makes the matching call again once the VTherm is available.
 - **Entry unloaded or disabled**: no call is made; an inhibited VTherm **stays inhibited** (unloading never means `inactive`). Turn the bypass on before disabling the entry if the VTherm must resume, or delete the entry.
 - **Entry deleted**: `unset_inhibition` is called, the VTherm is released and works as before (if Versatile Thermostat is not running at that moment, a warning is logged; see below).
-- **VTherm reload**: the core restores its inhibition state; the plugin makes the matching call again once the VTherm has started.
+- **VTherm reload**: the core restores its inhibition state; the plugin makes the matching call again as soon as the VTherm entity is back.
 
 ### Recovery if the plugin is removed while a VTherm is inhibited
 
