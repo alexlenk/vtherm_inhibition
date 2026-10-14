@@ -19,7 +19,7 @@ from vtherm_api.log_collector import get_vtherm_logger
 from .const import CONF_SOURCE_ENTITIES, CONF_VTHERM_ENTITY_ID, DOMAIN, PLATFORMS
 from .detector import InhibitionDetector
 from .entity import vtherm_device
-from .link import VThermLink, async_release_vtherm
+from .link import ISSUE_CORE_WITHOUT_INHIBITION, VThermLink, async_release_vtherm, release_issue_id
 from .models import InhibitionConfig, migrate_v1_settings
 
 _LOGGER = get_vtherm_logger(__name__)
@@ -96,6 +96,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -
     link = VThermLink(hass, detector, entry.title)
     link.rename_handler = lambda new: _async_rename_vtherm(hass, entry, new)
     entry.runtime_data = InhibitionRuntime(detector, link)
+    # The VTherm is driven again: a failed release of a previous entry no longer matters.
+    ir.async_delete_issue(hass, DOMAIN, release_issue_id(config.vtherm_unique_id, config.vtherm_entity_id))
 
     # Entities restore the last confirmed status and the bypass before start.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -149,6 +151,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) 
     """Release the VTherm (``unset_inhibition``) once its entry is deleted."""
     config = InhibitionConfig.from_entry(entry.data, entry.options)
     await async_release_vtherm(hass, config.vtherm_unique_id, config.vtherm_entity_id, entry.title)
+    if not any(other.entry_id != entry.entry_id for other in hass.config_entries.async_entries(DOMAIN)):
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

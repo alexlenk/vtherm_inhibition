@@ -103,7 +103,11 @@
     },
     "unset_failing": {
       "title": "Versatile Thermostat ne peut pas sortir de l'inhibition",
-      "description": "L'inhibition de {entry} est terminée, mais {vtherm} n'a pas pu en sortir : {error}. Le VTherm reste inhibé (équipements non pilotés). Le plugin réessaie toutes les 5 minutes ; consultez les journaux de Versatile Thermostat. Ce problème disparaît dès que le VTherm a repris ou que l'inhibition est de nouveau active."
+      "description": "L'inhibition de {entry} ({vtherm}) est terminée, mais Versatile Thermostat n'a pas pu en sortir : {error}. Le VTherm reste inhibé (équipements non pilotés). Tant que le VTherm est disponible, le plugin réessaie toutes les 5 minutes ; consultez les journaux de Versatile Thermostat. Ce problème disparaît dès que le VTherm a repris ou que l'inhibition est de nouveau active."
+    },
+    "release_failed": {
+      "title": "VTherm peut-être encore inhibé",
+      "description": "La suppression de l'entrée VTherm Inhibition n'a pas pu libérer {vtherm} ({error}) : il peut rester inhibé, ses équipements non pilotés. Pour le libérer, une fois Versatile Thermostat démarré, ajoutez de nouveau une entrée VTherm Inhibition pour ce VTherm (elle le libère dès que ses sources sont inactives), puis supprimez-la. Ce problème disparaît dès qu'une entrée pour ce VTherm est mise en place."
     }
   }
 }

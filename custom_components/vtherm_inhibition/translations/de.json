@@ -103,7 +103,11 @@
     },
     "unset_failing": {
       "title": "Versatile Thermostat kann die Sperre nicht verlassen",
-      "description": "Die Sperre von {entry} ist beendet, aber {vtherm} konnte sie nicht verlassen: {error}. Der VTherm bleibt gesperrt (Geräte werden nicht geregelt). Das Plugin versucht es alle 5 Minuten erneut; prüfe die Logs von Versatile Thermostat. Diese Meldung verschwindet, sobald der VTherm wieder regelt oder die Sperre wieder aktiv ist."
+      "description": "Die Sperre von {entry} ({vtherm}) ist beendet, aber Versatile Thermostat konnte sie nicht verlassen: {error}. Der VTherm bleibt gesperrt (Geräte werden nicht geregelt). Solange der VTherm verfügbar ist, versucht es das Plugin alle 5 Minuten erneut; prüfe die Logs von Versatile Thermostat. Diese Meldung verschwindet, sobald der VTherm wieder regelt oder die Sperre wieder aktiv ist."
+    },
+    "release_failed": {
+      "title": "VTherm möglicherweise noch gesperrt",
+      "description": "Beim Löschen des VTherm-Sperre-Eintrags konnte {vtherm} nicht freigegeben werden ({error}): Er bleibt möglicherweise gesperrt und seine Geräte werden nicht geregelt. Zum Freigeben füge, sobald Versatile Thermostat läuft, wieder einen VTherm-Sperre-Eintrag für diesen VTherm hinzu (er gibt den VTherm frei, sobald seine Quellen inaktiv sind) und lösche ihn dann. Diese Meldung verschwindet, sobald ein Eintrag für diesen VTherm eingerichtet ist."
     }
   }
 }

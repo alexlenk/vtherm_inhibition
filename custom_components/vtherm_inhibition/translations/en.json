@@ -103,7 +103,11 @@
     },
     "unset_failing": {
       "title": "Versatile Thermostat cannot leave the inhibition",
-      "description": "The inhibition of {entry} is over, but {vtherm} could not leave it: {error}. The VTherm stays inhibited (devices not controlled). The plugin keeps retrying every 5 minutes; check the Versatile Thermostat logs. This issue disappears once the VTherm has resumed or the inhibition is active again."
+      "description": "The inhibition of {entry} ({vtherm}) is over, but Versatile Thermostat could not leave it: {error}. The VTherm stays inhibited (devices not controlled). While the VTherm is available the plugin retries every 5 minutes; check the Versatile Thermostat logs. This issue disappears once the VTherm has resumed or the inhibition is active again."
+    },
+    "release_failed": {
+      "title": "VTherm possibly still inhibited",
+      "description": "Deleting the VTherm Inhibition entry could not release {vtherm} ({error}): it may stay inhibited, its devices not controlled. To release it, once Versatile Thermostat is running add a VTherm Inhibition entry for this VTherm again (it releases the VTherm as soon as its sources are inactive), then delete it. This issue disappears when an entry for this VTherm is set up."
     }
   }
 }

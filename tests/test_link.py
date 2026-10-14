@@ -16,7 +16,7 @@ from custom_components.vtherm_inhibition.const import CONF_STOP_UNDERLYINGS, CON
 from custom_components.vtherm_inhibition.link import ISSUE_CORE_WITHOUT_INHIBITION
 from custom_components.vtherm_inhibition.models import InhibitionStatus
 
-from .conftest import VT_ENTITY_ID, FakeCoreAPI, set_vtherm_state
+from .conftest import VT_ENTITY_ID, VT_UNIQUE_ID, FakeCoreAPI, set_vtherm_state
 
 HEATER = "input_boolean.heater"
 SENSOR = "binary_sensor.bathroom_inhibition"
@@ -167,14 +167,23 @@ async def test_restart_restored_active_is_reasserted(hass: HomeAssistant, vtherm
 
 
 async def test_waits_for_the_vtherm_entity(hass: HomeAssistant, core_api, setup_plugin, advance) -> None:
-    """Plugin set up before the VTherm entity exists: no call until it exists; then called at once,
-    without waiting for the VTherm startup (the core merges an early set with its restored state)."""
+    """Plugin set up before the VTherm entity exists (not even registered): no call until it
+    exists; then called at once, without waiting for the VTherm startup (the core merges an
+    early set with its restored state)."""
     hass.states.async_set(HEATER, "on")
+    hass.states.async_set(VT_ENTITY_ID, "heat")  # another entity with the stored entity ID: not used
     entry = await setup_plugin([HEATER])
     assert core_api.calls == []
     assert _attrs(hass)["retry_pending"] is True
     assert _attrs(hass)["vtherm_available"] is False
+    assert _attrs(hass)["vtherm_entity_id"] == ""
     await advance(600)
+    assert core_api.calls == []
+    hass.states.async_remove(VT_ENTITY_ID)
+
+    er.async_get(hass).async_get_or_create("climate", "versatile_thermostat", VT_UNIQUE_ID, suggested_object_id="bathroom")
+    await hass.async_block_till_done()
+    assert _attrs(hass)["vtherm_entity_id"] == VT_ENTITY_ID
     assert core_api.calls == []
 
     hass.states.async_set(VT_ENTITY_ID, "heat")  # first state of the entity, before its startup
@@ -227,14 +236,36 @@ async def test_removal_unsets(hass: HomeAssistant, vtherm, core_api, setup_plugi
     assert core_api.calls == [SET, UNSET]
 
 
-async def test_removal_with_vtherm_missing(hass: HomeAssistant, core_api, setup_plugin, caplog) -> None:
-    """Removal while the VTherm does not exist: logged, no crash."""
+async def test_removal_with_vtherm_deleted(hass: HomeAssistant, core_api, setup_plugin, caplog) -> None:
+    """Removal while the VTherm does not exist any more: nothing to release, no issue."""
     hass.states.async_set(HEATER, "on")
     entry = await setup_plugin([HEATER])
     assert await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
     assert core_api.calls == []
-    assert "could not release climate.bathroom" in caplog.text
+    assert "nothing to release" in caplog.text
+    assert not [i for i in ir.async_get(hass).issues.values() if i.domain == DOMAIN]
+
+
+async def test_removal_release_failure_raises_issue(hass: HomeAssistant, vtherm, core_api, setup_plugin) -> None:
+    """Removal while Versatile Thermostat cannot be reached: a persistent repair issue explains
+    the recovery; setting up an entry for this VTherm again removes it."""
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    hass.data[API_DOMAIN].pop(VTHERM_API_NAME)  # core not loaded
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, "release_failed_vt-bathroom-uid")
+    assert issue is not None
+    assert issue.is_persistent is True
+    assert issue.translation_placeholders == {
+        "vtherm": VT_ENTITY_ID,
+        "error": "LookupError: Versatile Thermostat is not loaded",
+    }
+
+    hass.data[API_DOMAIN][VTHERM_API_NAME] = core_api
+    await setup_plugin([HEATER])
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "release_failed_vt-bathroom-uid") is None
 
 
 async def test_vtherm_reload_reasserts(hass: HomeAssistant, vtherm, core_api, setup_plugin) -> None:
@@ -374,7 +405,34 @@ async def test_real_facade_errors(hass: HomeAssistant, vtherm, setup_plugin, adv
 
     component.entities = [_OldVTherm()]
     await advance(30)
-    assert _attrs(hass)["last_error"] == "TypeError: VTherm entity 'climate.bathroom' does not support inhibition"
+    assert _attrs(hass)["last_error"] == (
+        "CoreWithoutInhibitionError: VTherm entity 'climate.bathroom' does not support inhibition"
+    )
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION) is not None
+    assert _attrs(hass)["next_retry_at"] is None  # not retried on a timer
+
+    # A VTherm with inhibition support whose core raises a TypeError: an ordinary failure.
+    calls: list[str] = []
+
+    class _BuggyVTherm:
+        entity_id = VT_ENTITY_ID
+
+        async def async_set_inhibition(self, stop_underlyings: bool) -> None:
+            calls.append("set")
+            raise TypeError("unsupported operand type(s) for +: 'NoneType' and 'float'")
+
+        async def async_unset_inhibition(self) -> None:
+            calls.append("unset")
+
+    component.entities = [_BuggyVTherm()]
+    hass.states.async_remove(VT_ENTITY_ID)
+    set_vtherm_state(hass)  # restarted VTherm
+    await hass.async_block_till_done()
+    assert calls == ["set"]
+    assert _attrs(hass)["last_error"].startswith("TypeError: unsupported operand")
+    assert _attrs(hass)["next_retry_at"] is not None
+    await advance(30)
+    assert calls == ["set", "set"]
     hass.data.pop(CLIMATE_DOMAIN)
 
 
@@ -426,3 +484,117 @@ def test_fake_api_is_a_vtherm_api() -> None:
         fake = inspect.signature(getattr(FakeCoreAPI, name)).parameters
         real = inspect.signature(getattr(VThermAPI, name)).parameters
         assert list(fake) == list(real)
+
+
+async def test_core_internal_type_error_is_retried(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """A TypeError raised inside the core's exit reconciliation is an ordinary failure:
+    retried, unset_failing issue after the 3rd retry, no 'core without inhibition' issue."""
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    core_api.errors = [TypeError("unsupported operand type(s) for +: 'NoneType' and 'float'")] * 4
+    hass.states.async_set(HEATER, "off")
+    await hass.async_block_till_done()
+    for delay in (30, 60, 120):
+        await advance(delay)
+    assert core_api.names == ["set", "unset", "unset", "unset", "unset"]
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION) is None
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "unset_failing_vt-bathroom-uid") is not None
+    await advance(300)
+    assert core_api.names[-1] == "unset"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "unset_failing_vt-bathroom-uid") is None
+
+
+async def test_core_without_inhibition_issue_cleared_with_last_entry(
+    hass: HomeAssistant, vtherm, core_api, setup_plugin
+) -> None:
+    """The 'core without inhibition' issue goes away when the last entry is deleted."""
+    core_api.errors = [TypeError("VTherm entity 'climate.bathroom' does not support inhibition")]
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION) is not None
+    core_api.errors = [RuntimeError("still failing")]
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION) is None
+
+
+async def test_reappearance_during_a_failing_call(hass: HomeAssistant, vtherm, core_api, setup_plugin) -> None:
+    """The VTherm reappears while a call to the old instance is in flight and fails: the call is
+    made again at once on the new instance (no 30 s retry)."""
+    hass.states.async_set(HEATER, "off")
+    await setup_plugin([HEATER])
+    core_api.gate = asyncio.Event()
+    core_api.errors = [RuntimeError("old instance gone")]
+    hass.states.async_set(HEATER, "on")
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert core_api.names == ["unset", "set"]
+    hass.states.async_remove(VT_ENTITY_ID)
+    set_vtherm_state(hass)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    core_api.gate.set()
+    await hass.async_block_till_done()
+    assert core_api.names == ["unset", "set", "set"]
+    assert _attrs(hass)["retry_pending"] is False
+
+
+def _core_state(hass: HomeAssistant, inhibited: bool, gate: str, error: str | None = None) -> None:
+    hass.states.async_set(
+        VT_ENTITY_ID,
+        "off" if inhibited else "heat",
+        {
+            "is_ready": True,
+            "specific_states": {
+                "inhibition": {
+                    "schema_version": 1,
+                    "inhibited": inhibited,
+                    "command_gate": gate,
+                    "last_error_code": error,
+                }
+            },
+        },
+    )
+
+
+async def test_deferred_exit_failure_is_retried(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """unset succeeded (exit deferred by the core), then the core reports itself inhibited again
+    (failed deferred exit): the plugin retries the unset with the normal backoff."""
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    hass.states.async_set(HEATER, "off")
+    await hass.async_block_till_done()
+    assert core_api.names == ["set", "unset"]
+    _core_state(hass, inhibited=False, gate="EXIT_RECONCILING")  # deferred exit in progress
+    await hass.async_block_till_done()
+    assert _attrs(hass)["retry_pending"] is False
+
+    _core_state(hass, inhibited=True, gate="CLOSED", error="exit_reconcile_failed")
+    await hass.async_block_till_done()
+    attrs = _attrs(hass)
+    assert attrs["retry_pending"] is True
+    assert attrs["next_retry_at"] is not None
+    assert attrs["last_error"] == "Versatile Thermostat is inhibited (exit_reconcile_failed)"
+    _core_state(hass, inhibited=True, gate="CLOSED", error="exit_reconcile_failed")  # no second schedule
+    await advance(29)
+    assert core_api.names == ["set", "unset"]
+    await advance(1)
+    assert core_api.names == ["set", "unset", "unset"]
+    _core_state(hass, inhibited=False, gate="OPEN")
+    await hass.async_block_till_done()
+    assert _attrs(hass)["retry_pending"] is False
+    assert _attrs(hass)["last_error"] is None
+
+
+async def test_lost_inhibition_is_set_again(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """set succeeded but the core later reports itself not inhibited: set again (backoff)."""
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    _core_state(hass, inhibited=True, gate="CLOSED")
+    await hass.async_block_till_done()
+    assert core_api.names == ["set"]
+    _core_state(hass, inhibited=False, gate="OPEN")
+    await hass.async_block_till_done()
+    assert _attrs(hass)["retry_pending"] is True
+    await advance(30)
+    assert core_api.names == ["set", "set"]

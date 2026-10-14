@@ -7,7 +7,8 @@ entry stop, exit reconciliation, persistence); everything else is decided
 here:
 
 * the VTherm is targeted by its stable unique ID, resolved to its current
-  entity ID through the entity registry at every call (renames are followed);
+  entity ID through the entity registry at every call (renames are followed;
+  a unique ID missing from the registry means the VTherm is not available);
 * a call is only made while the VTherm is *available*: its entity exists (it
   has a state that is not ``unavailable``). The VTherm does not need to have
   started: the core merges an early ``set`` with the inhibition state it
@@ -24,7 +25,12 @@ here:
   failing after the 3rd retry raises a repair issue, removed on success or
   status change;
 * repeated statuses asking for the same call (``ACTIVE`` <-> ``UNKNOWN``) make
-  no new call: ``stop_underlyings`` is only read when an inhibition starts.
+  no new call: ``stop_underlyings`` is only read when an inhibition starts;
+* the inhibition state the core publishes (``specific_states.inhibition``) is
+  checked against the last successful call: an exit that the core deferred
+  until the VTherm was ready and that failed afterwards (the VTherm is
+  inhibited again), or an inhibition the VTherm lost, is retried like a
+  failed call.
 
 Stopping the link (entry unload or reload) makes no call: unloading never
 implies ``INACTIVE``.
@@ -61,8 +67,18 @@ _LOGGER = get_vtherm_logger(__name__)
 
 ISSUE_CORE_WITHOUT_INHIBITION = "core_without_inhibition"
 DOCUMENTATION_URL = "https://github.com/alexlenk/vtherm_inhibition#prerequisites"
+RECOVERY_URL = "https://github.com/alexlenk/vtherm_inhibition#recovery-if-the-plugin-is-removed-while-a-vtherm-is-inhibited"
 
 ISSUE_UNSET_FAILING = "unset_failing"
+ISSUE_RELEASE_FAILED = "release_failed"
+
+#: Message of the facade's TypeError for an entity without inhibition support.
+_FACADE_UNSUPPORTED = "does not support inhibition"
+_INHIBITION_METHODS = ("async_set_inhibition", "async_unset_inhibition")
+
+
+class CoreWithoutInhibitionError(Exception):
+    """The VTherm entity has no inhibition support (Versatile Thermostat too old)."""
 
 
 def get_core_api(hass: HomeAssistant) -> VThermAPI | None:
@@ -75,11 +91,14 @@ def get_core_api(hass: HomeAssistant) -> VThermAPI | None:
 
 
 def resolve_vtherm_entity_id(hass: HomeAssistant, unique_id: str, fallback_entity_id: str) -> str:
-    """Return the current entity ID of the VTherm with this unique ID."""
+    """Return the current entity ID of the VTherm with this unique ID ("" if it is not registered).
+
+    The stored entity ID is only used for an entry without unique ID: it could
+    designate another (recreated) VTherm or a climate entity of another
+    integration.
+    """
     if unique_id:
-        entity_id = er.async_get(hass).async_get_entity_id(CLIMATE_DOMAIN, VT_DOMAIN, unique_id)
-        if entity_id is not None:
-            return entity_id
+        return er.async_get(hass).async_get_entity_id(CLIMATE_DOMAIN, VT_DOMAIN, unique_id) or ""
     return fallback_entity_id
 
 
@@ -88,15 +107,53 @@ def vtherm_available(state: State | None) -> bool:
     return state is not None and state.state != STATE_UNAVAILABLE
 
 
+def _check_inhibition_support(hass: HomeAssistant, entity_id: str) -> None:
+    """Raise CoreWithoutInhibitionError when the climate entity lacks the inhibition methods."""
+    component = hass.data.get(CLIMATE_DOMAIN)
+    for entity in getattr(component, "entities", ()):
+        if getattr(entity, "entity_id", None) == entity_id:
+            if not all(callable(getattr(entity, method, None)) for method in _INHIBITION_METHODS):
+                raise CoreWithoutInhibitionError(f"VTherm entity '{entity_id}' does not support inhibition")
+            return
+
+
 async def async_call_api(hass: HomeAssistant, call: ApiCall, entity_id: str, stop_underlyings: bool) -> None:
-    """Make one facade call. Raises like the facade (LookupError, TypeError, ...)."""
+    """Make one facade call. Raises like the facade (LookupError, ...), and
+    CoreWithoutInhibitionError only for a VTherm without inhibition support: a
+    TypeError raised inside the core is an ordinary failure."""
     api = get_core_api(hass)
     if api is None:
         raise LookupError("Versatile Thermostat is not loaded")
-    if call is ApiCall.SET:
-        await api.set_inhibition(entity_id, stop_underlyings)
-    else:
-        await api.unset_inhibition(entity_id)
+    _check_inhibition_support(hass, entity_id)
+    try:
+        if call is ApiCall.SET:
+            await api.set_inhibition(entity_id, stop_underlyings)
+        else:
+            await api.unset_inhibition(entity_id)
+    except TypeError as err:
+        if _FACADE_UNSUPPORTED in str(err):
+            raise CoreWithoutInhibitionError(str(err)) from err
+        raise
+
+
+def core_inhibited(state: State | None) -> bool | None:
+    """The inhibition state published by the core: True (inhibited, gate closed),
+    False (not inhibited, gate open), None (not published or in transition)."""
+    if state is None:
+        return None
+    snapshot = (state.attributes.get("specific_states") or {}).get("inhibition")
+    if not isinstance(snapshot, dict):
+        return None
+    if snapshot.get("inhibited") is True and snapshot.get("command_gate") == "CLOSED":
+        return True
+    if snapshot.get("inhibited") is False and snapshot.get("command_gate") == "OPEN":
+        return False
+    return None
+
+
+@callback
+def _is_registry_create(event_data: er.EventEntityRegistryUpdatedData) -> bool:
+    return event_data["action"] == "create"
 
 
 def _format_error(err: BaseException) -> str:
@@ -203,7 +260,16 @@ class VThermLink:
         config = self._detector.config
         self._entity_id = resolve_vtherm_entity_id(self._hass, config.vtherm_unique_id, config.vtherm_entity_id)
         self._unsub_vtherm = []
-        if self._entity_id:
+        if not self._entity_id:
+            # Not registered (yet): resolve again when an entity is registered.
+            self._unsub_vtherm = [
+                self._hass.bus.async_listen(
+                    er.EVENT_ENTITY_REGISTRY_UPDATED,
+                    self._async_registry_created,
+                    event_filter=_is_registry_create,
+                )
+            ]
+        else:
             self._unsub_vtherm = [
                 async_track_state_change_event(self._hass, [self._entity_id], self._async_vtherm_state_changed),
                 async_track_entity_registry_updated_event(
@@ -213,8 +279,40 @@ class VThermLink:
         self._update_availability(self._hass.states.get(self._entity_id) if self._entity_id else None)
 
     @callback
+    def _async_registry_created(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        config = self._detector.config
+        if self._started and resolve_vtherm_entity_id(self._hass, config.vtherm_unique_id, config.vtherm_entity_id):
+            self._track_vtherm()
+            self._publish()
+
+    @callback
     def _async_vtherm_state_changed(self, event: Event[EventStateChangedData]) -> None:
-        self._update_availability(event.data["new_state"])
+        state = event.data["new_state"]
+        if vtherm_available(state) and self._available:
+            self._check_core_state(state)
+        self._update_availability(state)
+
+    @callback
+    def _check_core_state(self, state: State) -> None:
+        """Retry when the core's inhibition no longer matches the last successful call."""
+        if (
+            not self._started
+            or self._applied is None
+            or self._wanted != self._applied
+            or (self._task is not None and not self._task.done())
+            or self._retry_cancel is not None
+        ):
+            return
+        inhibited = core_inhibited(state)
+        if inhibited is None or inhibited == (self._wanted is ApiCall.SET):
+            return
+        snapshot = state.attributes["specific_states"]["inhibition"]
+        reason = snapshot.get("last_error_code") or ("inhibited" if inhibited else "not inhibited")
+        self._last_error = f"Versatile Thermostat is {'inhibited' if inhibited else 'not inhibited'} ({reason})"
+        _LOGGER.warning("%s - %s after %s_inhibition, retrying", self, self._last_error, self._wanted)
+        self._applied = None
+        self._schedule_retry()
+        self._publish()
 
     @callback
     def _async_vtherm_registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
@@ -297,9 +395,11 @@ class VThermLink:
                 self._applied = None
                 self._last_error = _format_error(err)
                 self._async_handle_error(call, err)
-                if self._wanted == call:
-                    self._schedule_retry(err)
+                if self._wanted == call and generation == self._generation:
+                    if not isinstance(err, CoreWithoutInhibitionError):
+                        self._schedule_retry()
                     break
+                # The wanted call changed, or the VTherm reappeared: call again at once.
             else:
                 # Not applied to a VTherm that reappeared during the call.
                 self._applied = call if generation == self._generation else None
@@ -312,7 +412,7 @@ class VThermLink:
 
     @callback
     def _async_handle_error(self, call: ApiCall, err: Exception) -> None:
-        if isinstance(err, TypeError):
+        if isinstance(err, CoreWithoutInhibitionError):
             _LOGGER.error(
                 "%s - %s_inhibition refused, the installed Versatile Thermostat has no inhibition support: %s",
                 self,
@@ -332,10 +432,11 @@ class VThermLink:
             _LOGGER.warning("%s - %s_inhibition failed for %s: %s", self, call, self._entity_id, _format_error(err))
 
     @callback
-    def _schedule_retry(self, err: Exception) -> None:
-        """Retry with a bounded backoff (not for a core without inhibition support:
-        that needs an update and a restart, after which the VTherm reappears)."""
-        if isinstance(err, TypeError) or not self._started or not self._available:
+    def _schedule_retry(self) -> None:
+        """Retry with a bounded backoff while the VTherm is available (a core without
+        inhibition support is not retried: it needs an update and a restart, after
+        which the VTherm reappears)."""
+        if not self._started or not self._available:
             return
         if self._wanted is ApiCall.UNSET and self._retry_count >= len(RETRY_DELAYS):
             self._raise_unset_issue()
@@ -405,10 +506,21 @@ class VThermLink:
         }
 
 
+def release_issue_id(unique_id: str, entity_id: str) -> str:
+    """ID of the repair issue raised when a VTherm could not be released on removal."""
+    return f"{ISSUE_RELEASE_FAILED}_{unique_id or entity_id}"
+
+
 async def async_release_vtherm(hass: HomeAssistant, unique_id: str, fallback_entity_id: str, name: str) -> None:
-    """Call ``unset_inhibition`` once (entry removal); failures are only logged."""
+    """Call ``unset_inhibition`` once (entry removal).
+
+    A failure raises a persistent repair issue (the entry is gone, nothing will
+    retry): the VTherm may stay inhibited. It is removed when an entry for this
+    VTherm is set up again.
+    """
     entity_id = resolve_vtherm_entity_id(hass, unique_id, fallback_entity_id)
     if not entity_id:
+        _LOGGER.info("VThermInhibition-%s - the VTherm does not exist any more, nothing to release", name)
         return
     try:
         await async_call_api(hass, ApiCall.UNSET, entity_id, False)
@@ -419,6 +531,17 @@ async def async_release_vtherm(hass: HomeAssistant, unique_id: str, fallback_ent
             name,
             entity_id,
             _format_error(err),
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            release_issue_id(unique_id, entity_id),
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_RELEASE_FAILED,
+            translation_placeholders={"vtherm": entity_id, "error": _format_error(err)},
+            learn_more_url=RECOVERY_URL,
         )
     else:
         _LOGGER.info("VThermInhibition-%s - %s released (entry removed)", name, entity_id)

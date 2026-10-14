@@ -91,7 +91,6 @@ class InhibitionDetector:
         self._status = InhibitionStatus.UNKNOWN
         self._raw = InhibitionStatus.UNKNOWN
         self._live = False
-        self._restored_status: InhibitionStatus | None = None
         self._bypass = False
         self._started = False
         self._sources: dict[str, SourceState] = {}
@@ -194,8 +193,7 @@ class InhibitionDetector:
         if self._started or self._config.unavailable_grace_period <= 0:
             return
         if status in (InhibitionStatus.ACTIVE, InhibitionStatus.INACTIVE):
-            self._restored_status = InhibitionStatus(status)
-            self._status = self._restored_status
+            self._status = InhibitionStatus(status)
             self._unavailable_since = unavailable_since
             _LOGGER.debug("%s - restored confirmed status %s (unavailable since %s)", self, status, unavailable_since)
 
