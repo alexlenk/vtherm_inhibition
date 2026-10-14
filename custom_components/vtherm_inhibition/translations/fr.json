@@ -100,6 +100,10 @@
     "missing_sources": {
       "title": "Sources d'inhibition manquantes",
       "description": "L'inhibition de {entry} utilise des sources qui n'existent plus : {sources}. Tant qu'une source manque, l'état devient inconnu après le délai de grâce. Modifiez les options de l'entrée pour choisir d'autres sources."
+    },
+    "unset_failing": {
+      "title": "Versatile Thermostat ne peut pas sortir de l'inhibition",
+      "description": "L'inhibition de {entry} est terminée, mais {vtherm} n'a pas pu en sortir : {error}. Le VTherm reste inhibé (équipements non pilotés). Le plugin réessaie toutes les 5 minutes ; consultez les journaux de Versatile Thermostat. Ce problème disparaît dès que le VTherm a repris ou que l'inhibition est de nouveau active."
     }
   }
 }

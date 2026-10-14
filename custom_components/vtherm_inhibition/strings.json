@@ -100,6 +100,10 @@
     "missing_sources": {
       "title": "Missing inhibition sources",
       "description": "The inhibition of {entry} uses sources that do not exist any more: {sources}. While a source is missing the status becomes unknown after the grace period. Edit the options of the entry to choose other sources."
+    },
+    "unset_failing": {
+      "title": "Versatile Thermostat cannot leave the inhibition",
+      "description": "The inhibition of {entry} is over, but {vtherm} could not leave it: {error}. The VTherm stays inhibited (devices not controlled). The plugin keeps retrying every 5 minutes; check the Versatile Thermostat logs. This issue disappears once the VTherm has resumed or the inhibition is active again."
     }
   }
 }

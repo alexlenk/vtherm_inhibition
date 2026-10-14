@@ -8,18 +8,21 @@ here:
 
 * the VTherm is targeted by its stable unique ID, resolved to its current
   entity ID through the entity registry at every call (renames are followed);
-* a call is only made while the VTherm is *available*: its state exists, is
-  not ``unavailable`` and its ``is_ready`` attribute is ``true``. Calling
-  before the VTherm has started would make the core skip the inhibition state
-  it restores after a restart (and send a second entry stop). The pending call
-  is made as soon as the VTherm becomes available;
+* a call is only made while the VTherm is *available*: its entity exists (it
+  has a state that is not ``unavailable``). The VTherm does not need to have
+  started: the core merges an early ``set`` with the inhibition state it
+  restores at startup (no second entry stop) and closes its command gate at
+  once (no startup command). The pending call is made as soon as the VTherm
+  becomes available;
 * each time the VTherm becomes available (Home Assistant start, VTherm
   reload) the current call is made again: ``set`` is idempotent in the core and
   ``unset`` is a no-op outside an inhibition;
 * a failed call (for example an exit reconciliation that failed in the core,
   which leaves the VTherm inhibited) is retried after 30 s, 60 s, 120 s, then
   every 5 minutes, as long as the confirmed status asks for the same call. A
-  status change cancels the retry and makes the new call;
+  status change cancels the retry and makes the new call. An ``unset`` still
+  failing after the 3rd retry raises a repair issue, removed on success or
+  status change;
 * repeated statuses asking for the same call (``ACTIVE`` <-> ``UNKNOWN``) make
   no new call: ``stop_underlyings`` is only read when an inhibition starts.
 
@@ -59,8 +62,7 @@ _LOGGER = get_vtherm_logger(__name__)
 ISSUE_CORE_WITHOUT_INHIBITION = "core_without_inhibition"
 DOCUMENTATION_URL = "https://github.com/alexlenk/vtherm_inhibition#prerequisites"
 
-#: VTherm state attribute telling that the VTherm has started.
-ATTR_IS_READY = "is_ready"
+ISSUE_UNSET_FAILING = "unset_failing"
 
 
 def get_core_api(hass: HomeAssistant) -> VThermAPI | None:
@@ -82,8 +84,8 @@ def resolve_vtherm_entity_id(hass: HomeAssistant, unique_id: str, fallback_entit
 
 
 def vtherm_available(state: State | None) -> bool:
-    """True when the VTherm exists and has started (its first state has no ``is_ready`` yet)."""
-    return state is not None and state.state != STATE_UNAVAILABLE and state.attributes.get(ATTR_IS_READY) is True
+    """True when the VTherm entity exists (its state is written as soon as it is added)."""
+    return state is not None and state.state != STATE_UNAVAILABLE
 
 
 async def async_call_api(hass: HomeAssistant, call: ApiCall, entity_id: str, stop_underlyings: bool) -> None:
@@ -145,7 +147,7 @@ class VThermLink:
 
     @property
     def vtherm_available(self) -> bool:
-        """Return True while the VTherm exists and has started."""
+        """Return True while the VTherm entity exists."""
         return self._available
 
     @property
@@ -173,6 +175,7 @@ class VThermLink:
         """Stop following; never calls ``unset`` (a call in progress completes)."""
         self._started = False
         self._cancel_retry()
+        self._clear_unset_issue()
         for unsub in (*self._unsubs, *self._unsub_vtherm):
             unsub()
         self._unsubs.clear()
@@ -258,6 +261,7 @@ class VThermLink:
         self._wanted = wanted
         self._retry_count = 0
         self._cancel_retry()
+        self._clear_unset_issue()
         self._kick()
         self._publish()
 
@@ -302,6 +306,7 @@ class VThermLink:
                 self._last_error = None
                 self._retry_count = 0
                 ir.async_delete_issue(self._hass, DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION)
+                self._clear_unset_issue()
             self._publish()
         self._publish()
 
@@ -332,11 +337,38 @@ class VThermLink:
         that needs an update and a restart, after which the VTherm reappears)."""
         if isinstance(err, TypeError) or not self._started or not self._available:
             return
+        if self._wanted is ApiCall.UNSET and self._retry_count >= len(RETRY_DELAYS):
+            self._raise_unset_issue()
         delay = RETRY_DELAYS[self._retry_count] if self._retry_count < len(RETRY_DELAYS) else RETRY_INTERVAL
         self._retry_count += 1
         self._next_retry_at = dt_util.utcnow() + timedelta(seconds=delay)
         self._retry_cancel = async_call_later(self._hass, delay, self._retry_job)
         _LOGGER.info("%s - %s retried in %s s (attempt %s)", self, self._wanted, delay, self._retry_count + 1)
+
+    @property
+    def _unset_issue_id(self) -> str:
+        return f"{ISSUE_UNSET_FAILING}_{self._detector.config.vtherm_unique_id or self._name}"
+
+    @callback
+    def _raise_unset_issue(self) -> None:
+        """The VTherm stays inhibited although the plugin confirmed INACTIVE."""
+        ir.async_create_issue(
+            self._hass,
+            DOMAIN,
+            self._unset_issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_UNSET_FAILING,
+            translation_placeholders={
+                "entry": self._name,
+                "vtherm": self._entity_id,
+                "error": self._last_error or "",
+            },
+        )
+
+    @callback
+    def _clear_unset_issue(self) -> None:
+        ir.async_delete_issue(self._hass, DOMAIN, self._unset_issue_id)
 
     @callback
     def _cancel_retry(self) -> None:

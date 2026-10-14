@@ -100,6 +100,10 @@
     "missing_sources": {
       "title": "Fehlende Sperrquellen",
       "description": "Die Sperre von {entry} nutzt Quellen, die nicht mehr existieren: {sources}. Solange eine Quelle fehlt, wird der Status nach der Toleranzzeit unbekannt. Wähle in den Optionen des Eintrags andere Quellen."
+    },
+    "unset_failing": {
+      "title": "Versatile Thermostat kann die Sperre nicht verlassen",
+      "description": "Die Sperre von {entry} ist beendet, aber {vtherm} konnte sie nicht verlassen: {error}. Der VTherm bleibt gesperrt (Geräte werden nicht geregelt). Das Plugin versucht es alle 5 Minuten erneut; prüfe die Logs von Versatile Thermostat. Diese Meldung verschwindet, sobald der VTherm wieder regelt oder die Sperre wieder aktiv ist."
     }
   }
 }
