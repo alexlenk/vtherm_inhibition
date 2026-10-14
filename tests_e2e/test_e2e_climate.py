@@ -362,3 +362,49 @@ async def test_failed_exit_is_retried(
     sensor = hass.states.get(BATHROOM_SENSOR).attributes
     assert sensor["last_error"] is None
     assert sensor["retry_pending"] is False
+
+
+async def test_failed_deferred_exit_is_retried(
+    hass: HomeAssistant, setup_bathroom, underlyings: Underlyings, facade_calls: FacadeCalls, advance
+) -> None:
+    """unset while the VTherm is not ready: the core defers the exit and returns; the deferred
+    reconciliation fails later (VTherm inhibited again). The plugin sees it in the core's
+    published state and retries the unset."""
+    from unittest.mock import PropertyMock
+
+    from custom_components.versatile_thermostat.base_thermostat import BaseThermostat
+
+    sc = await setup_bathroom(activation=10, deactivation=30)
+    hass.states.async_set(SOURCE, STATE_ON)
+    await advance(11)
+    assert_inhibited(sc)
+
+    original = UnderlyingClimate.async_inhibition_resync
+    failures = [RuntimeError("resync failed")]
+
+    async def _resync(self) -> None:
+        if failures:
+            raise failures.pop()
+        await original(self)
+
+    with patch.object(BaseThermostat, "is_ready", new_callable=PropertyMock, return_value=False):
+        hass.states.async_set(SOURCE, STATE_OFF)
+        await advance(31)
+        assert sc.attrs["command_gate"] == "EXIT_RECONCILING"
+    with patch.object(UnderlyingClimate, "async_inhibition_resync", _resync):
+        await sc.vt.init_underlyings_completed()
+        await hass.async_block_till_done()
+    assert_inhibited(sc)
+    assert sc.attrs["last_error_code"] == "exit_reconcile_failed"
+    sensor = hass.states.get(BATHROOM_SENSOR).attributes
+    assert sensor["status"] == "inactive"
+    assert sensor["retry_pending"] is True
+    assert sensor["last_error"] == "Versatile Thermostat is inhibited (exit_reconcile_failed)"
+
+    underlyings.reset()
+    await send_temperature(hass, sc.vt)
+    await advance(30)
+    assert_running(sc)
+    assert underlyings.hvac_modes()[-1] == "heat"
+    assert [name for name, _ in facade_calls.of(CLIMATE_VT_ID)][-2:] == ["unset", "unset"]
+    assert hass.states.get(BATHROOM_SENSOR).attributes["retry_pending"] is False
