@@ -13,8 +13,8 @@ from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
     CONF_DEACTIVATION_DELAY,
-    CONF_PHYSICAL_STOP_POLICY,
     CONF_SOURCE_ENTITIES,
+    CONF_STOP_UNDERLYINGS,
     CONF_TARGET_ENTITY,
     CONF_UNAVAILABLE_GRACE_PERIOD,
     CONF_VTHERM_ENTITY_ID,
@@ -30,7 +30,7 @@ SETTINGS = {
     CONF_ACTIVATION_DELAY: 10.0,
     CONF_DEACTIVATION_DELAY: 120.0,
     CONF_UNAVAILABLE_GRACE_PERIOD: 600.0,
-    CONF_PHYSICAL_STOP_POLICY: "do_not_turn_off",
+    CONF_STOP_UNDERLYINGS: False,
 }
 
 
@@ -38,7 +38,7 @@ async def _start(hass: HomeAssistant):
     return await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
 
-async def test_full_flow(hass: HomeAssistant, vtherm, fake_core) -> None:
+async def test_full_flow(hass: HomeAssistant, vtherm, core_api) -> None:
     """Select a VTherm, then sources and settings: entry created."""
     result = await _start(hass)
     assert result["type"] is FlowResultType.FORM
@@ -60,12 +60,13 @@ async def test_full_flow(hass: HomeAssistant, vtherm, fake_core) -> None:
         CONF_ACTIVATION_DELAY: 10,
         CONF_DEACTIVATION_DELAY: 120,
         CONF_UNAVAILABLE_GRACE_PERIOD: 600,
-        CONF_PHYSICAL_STOP_POLICY: "do_not_turn_off",
+        CONF_STOP_UNDERLYINGS: False,
     }
     entry = result["result"]
     assert entry.unique_id == f"{DOMAIN}-{VT_UNIQUE_ID}"
-    # The VTherm has been reloaded and the provider attached.
-    assert VT_UNIQUE_ID in fake_core.providers
+    assert entry.version == 2
+    # The sources do not exist: UNKNOWN keeps the VTherm inhibited, without entry stop.
+    assert core_api.calls == [("set", VT_ENTITY_ID, False)]
 
 
 async def test_defaults_in_settings_form(hass: HomeAssistant, vtherm) -> None:
@@ -78,7 +79,7 @@ async def test_defaults_in_settings_form(hass: HomeAssistant, vtherm) -> None:
     assert defaults[CONF_ACTIVATION_DELAY] == 30
     assert defaults[CONF_DEACTIVATION_DELAY] == 60
     assert defaults[CONF_UNAVAILABLE_GRACE_PERIOD] == 300
-    assert defaults[CONF_PHYSICAL_STOP_POLICY] == "turn_off"
+    assert defaults[CONF_STOP_UNDERLYINGS] is True
 
 
 async def test_not_a_vtherm(hass: HomeAssistant, vtherm) -> None:
@@ -177,11 +178,12 @@ async def test_duplicate_vtherm_aborts(hass: HomeAssistant, vtherm) -> None:
     assert result["reason"] == "already_configured"
 
 
-async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin, advance) -> None:
+async def test_options_flow(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
     """Options flow pre-fills current values, validates and applies them in place."""
     hass.states.async_set("input_boolean.heater", "on")
     hass.states.async_set("climate.ac", "cool")
     entry = await setup_plugin(["input_boolean.heater"], activation=5)
+    assert core_api.calls == [("set", VT_ENTITY_ID, True)]
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
@@ -204,14 +206,15 @@ async def test_options_flow(hass: HomeAssistant, vtherm, fake_core, setup_plugin
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_SOURCE_ENTITIES] == ["climate.ac"]
     assert entry.options[CONF_ACTIVATION_DELAY] == 10
-    detector = entry.runtime_data
+    detector = entry.runtime_data.detector
     assert detector.config.source_entities == ("climate.ac",)
-    assert detector.config.physical_stop_policy == "do_not_turn_off"
+    assert detector.config.stop_underlyings is False
     # climate.ac is in "cool", which is not an inhibiting mode any more: the raw
-    # change goes through the new deactivation delay, on the same provider.
-    provider = fake_core.providers[VT_UNIQUE_ID]
-    assert fake_core.attach_count == 1
-    assert provider.status == "active"
-    await advance(120)
-    assert provider.status == "inactive"
-    assert [t.new_status for t in fake_core.transitions] == ["inactive"]
+    # change goes through the new deactivation delay. The changed stop_underlyings
+    # makes no call while the VTherm is inhibited.
+    assert detector.status == "active"
+    await advance(119)
+    assert core_api.names == ["set"]
+    await advance(1)
+    assert detector.status == "inactive"
+    assert core_api.calls == [("set", VT_ENTITY_ID, True), ("unset", VT_ENTITY_ID, None)]

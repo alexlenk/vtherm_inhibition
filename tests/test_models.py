@@ -1,17 +1,17 @@
-"""Configuration model, policy normalization and aggregation rules."""
+"""Configuration model, migration of version 1 settings and aggregation rules."""
 
 from __future__ import annotations
 
 import pytest
 from homeassistant.core import State
-from vtherm_api import InhibitionStatus, InhibitionStopPolicy
 
 from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
     CONF_DEACTIVATION_DELAY,
-    CONF_PHYSICAL_STOP_POLICY,
+    CONF_LEGACY_PHYSICAL_STOP_POLICY,
     CONF_SOURCE_ENTITIES,
+    CONF_STOP_UNDERLYINGS,
     CONF_UNAVAILABLE_GRACE_PERIOD,
     CONF_VTHERM_ENTITY_ID,
     CONF_VTHERM_UNIQUE_ID,
@@ -19,7 +19,13 @@ from custom_components.vtherm_inhibition.const import (
     MAX_DELAY_SECONDS,
 )
 from custom_components.vtherm_inhibition.detector import aggregate, source_contribution
-from custom_components.vtherm_inhibition.models import InhibitionConfig, normalize_policy
+from custom_components.vtherm_inhibition.models import (
+    ApiCall,
+    InhibitionConfig,
+    InhibitionStatus,
+    call_for,
+    migrate_v1_settings,
+)
 
 MODES = frozenset(DEFAULT_CLIMATE_HVAC_MODES)
 
@@ -27,19 +33,32 @@ MODES = frozenset(DEFAULT_CLIMATE_HVAC_MODES)
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("turn_off", InhibitionStopPolicy.TURN_OFF),
-        ("do_not_turn_off", InhibitionStopPolicy.DO_NOT_TURN_OFF),
-        (" DO_NOT_TURN_OFF ", InhibitionStopPolicy.DO_NOT_TURN_OFF),
-        (InhibitionStopPolicy.DO_NOT_TURN_OFF, InhibitionStopPolicy.DO_NOT_TURN_OFF),
-        ("keep_on", InhibitionStopPolicy.TURN_OFF),
-        (None, InhibitionStopPolicy.TURN_OFF),
-        ("", InhibitionStopPolicy.TURN_OFF),
-        (42, InhibitionStopPolicy.TURN_OFF),
+        ("turn_off", True),
+        ("do_not_turn_off", False),
+        (" DO_NOT_TURN_OFF ", False),
+        ("keep_on", True),
+        (None, True),
+        ("", True),
+        (42, True),
     ],
 )
-def test_normalize_policy(value, expected) -> None:
-    """Invalid or missing policies fall back to TURN_OFF."""
-    assert normalize_policy(value) is expected
+def test_migrate_v1_policy(value, expected) -> None:
+    """Version 1 policy -> stop_underlyings; invalid or missing values were TURN_OFF."""
+    migrated = migrate_v1_settings({CONF_SOURCE_ENTITIES: ["switch.a"], CONF_LEGACY_PHYSICAL_STOP_POLICY: value})
+    assert migrated == {CONF_SOURCE_ENTITIES: ["switch.a"], CONF_STOP_UNDERLYINGS: expected}
+
+
+def test_migrate_v1_without_policy() -> None:
+    """Settings without the old key are left unchanged (no stop_underlyings added)."""
+    assert migrate_v1_settings({CONF_SOURCE_ENTITIES: ["switch.a"]}) == {CONF_SOURCE_ENTITIES: ["switch.a"]}
+    assert migrate_v1_settings({}) == {}
+
+
+def test_call_for_status() -> None:
+    """ACTIVE and UNKNOWN keep the VTherm inhibited; only INACTIVE releases it."""
+    assert call_for(InhibitionStatus.ACTIVE) is ApiCall.SET
+    assert call_for(InhibitionStatus.UNKNOWN) is ApiCall.SET
+    assert call_for(InhibitionStatus.INACTIVE) is ApiCall.UNSET
 
 
 def test_config_defaults() -> None:
@@ -52,7 +71,7 @@ def test_config_defaults() -> None:
     assert config.activation_delay == 30
     assert config.deactivation_delay == 60
     assert config.unavailable_grace_period == 300
-    assert config.physical_stop_policy is InhibitionStopPolicy.TURN_OFF
+    assert config.stop_underlyings is True
 
 
 def test_config_options_override_data() -> None:
@@ -61,7 +80,7 @@ def test_config_options_override_data() -> None:
         {
             CONF_VTHERM_UNIQUE_ID: "uid",
             CONF_SOURCE_ENTITIES: ["switch.a"],
-            CONF_PHYSICAL_STOP_POLICY: "turn_off",
+            CONF_STOP_UNDERLYINGS: True,
         },
         {
             CONF_SOURCE_ENTITIES: ["switch.b", "climate.ac", "switch.b"],
@@ -69,7 +88,7 @@ def test_config_options_override_data() -> None:
             CONF_ACTIVATION_DELAY: 12.7,
             CONF_DEACTIVATION_DELAY: -5,
             CONF_UNAVAILABLE_GRACE_PERIOD: MAX_DELAY_SECONDS * 2,
-            CONF_PHYSICAL_STOP_POLICY: "do_not_turn_off",
+            CONF_STOP_UNDERLYINGS: False,
         },
     )
     assert config.source_entities == ("switch.b", "climate.ac")
@@ -77,21 +96,21 @@ def test_config_options_override_data() -> None:
     assert config.activation_delay == 12
     assert config.deactivation_delay == 0
     assert config.unavailable_grace_period == MAX_DELAY_SECONDS
-    assert config.physical_stop_policy is InhibitionStopPolicy.DO_NOT_TURN_OFF
+    assert config.stop_underlyings is False
 
 
 def test_config_invalid_values() -> None:
-    """Garbage delays use defaults, an invalid policy falls back to TURN_OFF."""
+    """Garbage delays use defaults, a non-boolean stop_underlyings falls back to True."""
     config = InhibitionConfig.from_entry(
         {
             CONF_SOURCE_ENTITIES: "switch.single",
             CONF_ACTIVATION_DELAY: "abc",
-            CONF_PHYSICAL_STOP_POLICY: "explode",
+            CONF_STOP_UNDERLYINGS: "no",
         }
     )
     assert config.source_entities == ("switch.single",)
     assert config.activation_delay == 30
-    assert config.physical_stop_policy is InhibitionStopPolicy.TURN_OFF
+    assert config.stop_underlyings is True
 
 
 @pytest.mark.parametrize(
