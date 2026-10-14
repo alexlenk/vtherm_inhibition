@@ -166,26 +166,26 @@ async def test_restart_restored_active_is_reasserted(hass: HomeAssistant, vtherm
     assert core_api.calls == [SET, UNSET]
 
 
-async def test_restart_waits_for_the_vtherm(hass: HomeAssistant, core_api, setup_plugin, advance) -> None:
-    """Plugin set up before the VTherm has started: no call until it is ready (core restore first)."""
+async def test_waits_for_the_vtherm_entity(hass: HomeAssistant, core_api, setup_plugin, advance) -> None:
+    """Plugin set up before the VTherm entity exists: no call until it exists; then called at once,
+    without waiting for the VTherm startup (the core merges an early set with its restored state)."""
     hass.states.async_set(HEATER, "on")
     entry = await setup_plugin([HEATER])
     assert core_api.calls == []
     assert _attrs(hass)["retry_pending"] is True
     assert _attrs(hass)["vtherm_available"] is False
-
-    hass.states.async_set(VT_ENTITY_ID, "heat")  # first state of the entity, before its attributes
-    await hass.async_block_till_done()
-    assert core_api.calls == []
-    set_vtherm_state(hass, ready=False)  # async_startup has not run
     await advance(600)
     assert core_api.calls == []
 
-    set_vtherm_state(hass, ready=True)
+    hass.states.async_set(VT_ENTITY_ID, "heat")  # first state of the entity, before its startup
     await hass.async_block_till_done()
     assert core_api.calls == [SET]
     assert _attrs(hass)["retry_pending"] is False
     assert entry.runtime_data.link.vtherm_available is True
+    # Its startup (is_ready) is not a reappearance: no new call.
+    set_vtherm_state(hass, ready=True)
+    await hass.async_block_till_done()
+    assert core_api.calls == [SET]
 
 
 async def test_entry_reload_reasserts_without_unset(hass: HomeAssistant, vtherm, core_api, setup_plugin) -> None:
@@ -243,9 +243,10 @@ async def test_vtherm_reload_reasserts(hass: HomeAssistant, vtherm, core_api, se
     await setup_plugin([HEATER])
     hass.states.async_remove(VT_ENTITY_ID)
     await hass.async_block_till_done()
+    assert core_api.calls == [SET]
     set_vtherm_state(hass, ready=False)
     await hass.async_block_till_done()
-    assert core_api.calls == [SET]
+    assert core_api.calls == [SET, SET]
     set_vtherm_state(hass, ready=True)
     await hass.async_block_till_done()
     assert core_api.calls == [SET, SET]
@@ -272,11 +273,21 @@ async def test_unset_failure_is_retried(hass: HomeAssistant, vtherm, core_api, s
     assert attrs["next_retry_at"] is not None
     assert attrs["status"] == "inactive"
 
+    issue_id = "unset_failing_vt-bathroom-uid"
     for delay, count in ((30, 2), (60, 3), (120, 4), (300, 5)):
+        assert (ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None) is (count <= 4)
         await advance(delay - 1)
         assert core_api.names.count("unset") == count - 1
         await advance(1)
         assert core_api.names.count("unset") == count
+        if count == 4:  # the 3rd retry failed
+            issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+            assert issue is not None
+            assert issue.translation_placeholders == {
+                "entry": "Bathroom",
+                "vtherm": VT_ENTITY_ID,
+                "error": "RuntimeError: reconciliation failed",
+            }
     # The 5th failure is followed by a success 5 minutes later.
     await advance(300)
     assert core_api.names.count("unset") == 6
@@ -284,6 +295,7 @@ async def test_unset_failure_is_retried(hass: HomeAssistant, vtherm, core_api, s
     assert attrs["last_error"] is None
     assert attrs["retry_pending"] is False
     assert attrs["next_retry_at"] is None
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
     await advance(3600)
     assert core_api.names.count("unset") == 6
 
@@ -291,19 +303,24 @@ async def test_unset_failure_is_retried(hass: HomeAssistant, vtherm, core_api, s
 async def test_retry_cancelled_by_status_change(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
     """A status change cancels the retry of the failed unset and makes the new call."""
     hass.states.async_set(HEATER, "on")
-    await setup_plugin([HEATER], activation=10)
-    core_api.errors = [RuntimeError("reconciliation failed")]
+    entry = await setup_plugin([HEATER], activation=10)
+    core_api.errors = [RuntimeError("reconciliation failed")] * 4
     hass.states.async_set(HEATER, "off")
-    await hass.async_block_till_done()
-    assert core_api.names == ["set", "unset"]
+    for delay in (30, 60, 120):
+        await advance(delay)
+    assert core_api.names == ["set", "unset", "unset", "unset", "unset"]
+    issue_id = "unset_failing_vt-bathroom-uid"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
 
     hass.states.async_set(HEATER, "on")
     await advance(10)
     # After a failure the core state is not known: set is made even though it was the last success.
-    assert core_api.names == ["set", "unset", "set"]
+    assert core_api.names == ["set", "unset", "unset", "unset", "unset", "set"]
     assert _attrs(hass)["retry_pending"] is False
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
     await advance(3600)
-    assert core_api.names == ["set", "unset", "set"]
+    assert core_api.names == ["set", "unset", "unset", "unset", "unset", "set"]
+    assert entry.runtime_data.link.call_pending is False
 
 
 async def test_core_not_loaded_is_retried(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
