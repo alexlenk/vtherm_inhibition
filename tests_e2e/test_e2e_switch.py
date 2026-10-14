@@ -24,6 +24,7 @@ from .harness import (
     SWITCH_VT_ENTRY_ID,
     SWITCH_VT_ID,
     UNDERLYING_SWITCH,
+    FacadeCalls,
     Underlyings,
     heat_comfort,
     inhibition_attrs,
@@ -35,8 +36,10 @@ from .harness import (
 )
 
 
-async def test_over_switch_tpi(hass: HomeAssistant, underlyings: Underlyings, advance) -> None:
-    """One switch stop on entry, no TPI cycle while withdrawn, TPI resumes on exit."""
+async def test_over_switch_tpi(
+    hass: HomeAssistant, underlyings: Underlyings, facade_calls: FacadeCalls, advance
+) -> None:
+    """One set and one switch stop on entry, no TPI cycle while inhibited, one unset and TPI resumes on exit."""
     await setup_entry(hass, switch_vt_entry())
     underlyings.install()
     await heat_comfort(hass, vtherm(hass, SWITCH_VT_ID))
@@ -53,7 +56,8 @@ async def test_over_switch_tpi(hass: HomeAssistant, underlyings: Underlyings, ad
     assert vt.vtherm_hvac_mode == VThermHvacMode_HEAT
     assert vt.proportional_algorithm.on_percent > 0
     assert switch.is_on
-    assert inhibition_attrs(hass, SWITCH_VT_ID)["provider_status"] == "inactive"
+    assert inhibition_attrs(hass, SWITCH_VT_ID) is None  # unset outside an inhibition: no-op, never used
+    assert facade_calls.of(SWITCH_VT_ID) == [("unset", None)]
     underlyings.reset()
 
     hass.states.async_set(SOURCE, STATE_ON)
@@ -65,7 +69,11 @@ async def test_over_switch_tpi(hass: HomeAssistant, underlyings: Underlyings, ad
     assert len(underlyings.of("turn_off", UNDERLYING_SWITCH)) == 1
     assert underlyings.of("turn_on", UNDERLYING_SWITCH) == []
     assert not switch.is_on
-    assert inhibition_attrs(hass, SWITCH_VT_ID)["physical_stop_result"] == "sent"
+    attrs = inhibition_attrs(hass, SWITCH_VT_ID)
+    assert attrs["inhibited"] is True
+    assert attrs["command_gate"] == "CLOSED"
+    assert attrs["entry_stop_completed"] is True
+    assert facade_calls.of(SWITCH_VT_ID) == [("unset", None), ("set", True)]
 
     # Several cycles: no TPI cycle, no command (even a forced control cycle)
     underlyings.reset()
@@ -89,4 +97,44 @@ async def test_over_switch_tpi(hass: HomeAssistant, underlyings: Underlyings, ad
     assert vt.hvac_off_reason is None
     assert hass.states.get(OFFICE_SENSOR).state == STATE_OFF
     assert len(underlyings.of("turn_on", UNDERLYING_SWITCH)) >= 1
+    assert switch.is_on
+    assert inhibition_attrs(hass, SWITCH_VT_ID)["command_gate"] == "OPEN"
+    assert facade_calls.of(SWITCH_VT_ID) == [("unset", None), ("set", True), ("unset", None)]
+
+
+async def test_over_switch_without_stop(
+    hass: HomeAssistant, underlyings: Underlyings, facade_calls: FacadeCalls, advance
+) -> None:
+    """stop_underlyings false: the switch is left on (e.g. driven by another automation), never touched."""
+    await setup_entry(hass, switch_vt_entry())
+    underlyings.install()
+    await heat_comfort(hass, vtherm(hass, SWITCH_VT_ID))
+    await setup_entry(
+        hass,
+        plugin_entry(
+            vtherm_entry_id=SWITCH_VT_ENTRY_ID,
+            vtherm_entity_id=SWITCH_VT_ID,
+            activation=0,
+            deactivation=0,
+            stop_underlyings=False,
+        ),
+    )
+    underlyings.install()
+    switch = underlyings.switches[UNDERLYING_SWITCH]
+    vt = vtherm(hass, SWITCH_VT_ID)
+    await send_temperature(hass, vt)
+    await vt.async_control_heating(force=True)
+    await hass.async_block_till_done()
+    assert switch.is_on
+    underlyings.reset()
+
+    hass.states.async_set(SOURCE, STATE_ON)
+    await hass.async_block_till_done()
+    assert vt.hvac_off_reason == HVAC_OFF_REASON_INHIBITION
+    assert facade_calls.of(SWITCH_VT_ID)[-1] == ("set", False)
+    for _ in range(3):
+        await send_temperature(hass, vt, 14)
+        await vt.async_control_heating(force=True)
+        await advance(299)
+    assert underlyings.calls == []
     assert switch.is_on

@@ -59,8 +59,8 @@ from vtherm_api.const import get_tz
 from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
     CONF_DEACTIVATION_DELAY,
-    CONF_PHYSICAL_STOP_POLICY,
     CONF_SOURCE_ENTITIES,
+    CONF_STOP_UNDERLYINGS,
     CONF_UNAVAILABLE_GRACE_PERIOD,
     CONF_VTHERM_ENTITY_ID,
     CONF_VTHERM_UNIQUE_ID,
@@ -260,13 +260,14 @@ def plugin_entry(
     activation: int = 10,
     deactivation: int = 30,
     grace: int = 0,
-    policy: str = "turn_off",
+    stop_underlyings: bool = True,
 ) -> MockConfigEntry:
     """Plugin entry targeting a VTherm by its unique_id (= its config entry id)."""
     return MockConfigEntry(
         domain=PLUGIN_DOMAIN,
         title=vtherm_entity_id,
         unique_id=f"{PLUGIN_DOMAIN}-{vtherm_entry_id}",
+        version=2,
         data={
             CONF_VTHERM_ENTITY_ID: vtherm_entity_id,
             CONF_VTHERM_UNIQUE_ID: vtherm_entry_id,
@@ -274,7 +275,7 @@ def plugin_entry(
             CONF_ACTIVATION_DELAY: activation,
             CONF_DEACTIVATION_DELAY: deactivation,
             CONF_UNAVAILABLE_GRACE_PERIOD: grace,
-            CONF_PHYSICAL_STOP_POLICY: policy,
+            CONF_STOP_UNDERLYINGS: stop_underlyings,
         },
     )
 
@@ -316,6 +317,39 @@ def plugin_entity(hass: HomeAssistant, entity_id: str):
     raise AssertionError(f"{entity_id} not loaded")
 
 
+@dataclass
+class FacadeCalls:
+    """Every set/unset reaching a VTherm (through the vtherm_api facade)."""
+
+    calls: list[tuple[str, str, bool | None]] = field(default_factory=list)
+
+    def of(self, entity_id: str) -> list[tuple[str, bool | None]]:
+        """The calls to one VTherm: ("set", stop_underlyings) or ("unset", None)."""
+        return [(name, arg) for name, eid, arg in self.calls if eid == entity_id]
+
+
+@pytest.fixture(autouse=True)
+def facade_calls() -> FacadeCalls:
+    """Record the calls of BaseThermostat.async_set_inhibition / async_unset_inhibition."""
+    recorder = FacadeCalls()
+    original_set = BaseThermostat.async_set_inhibition
+    original_unset = BaseThermostat.async_unset_inhibition
+
+    async def _set(self, stop_underlyings: bool) -> None:
+        recorder.calls.append(("set", self.entity_id, stop_underlyings))
+        await original_set(self, stop_underlyings)
+
+    async def _unset(self) -> None:
+        recorder.calls.append(("unset", self.entity_id, None))
+        await original_unset(self)
+
+    with (
+        patch.object(BaseThermostat, "async_set_inhibition", _set),
+        patch.object(BaseThermostat, "async_unset_inhibition", _unset),
+    ):
+        yield recorder
+
+
 @pytest.fixture
 def advance(hass: HomeAssistant, freezer) -> Callable[[float], Awaitable[None]]:
     """Move the clock forward by N seconds and run the due timers."""
@@ -339,7 +373,6 @@ async def heat_comfort(hass: HomeAssistant, entity: BaseThermostat) -> None:
     await entity.async_set_hvac_mode(VThermHvacMode_HEAT)
     await entity.async_set_preset_mode(VThermPreset.COMFORT)
     await hass.async_block_till_done()
-
 
 
 BATHROOM_SENSOR = "binary_sensor.bathroom_inhibition"
@@ -369,7 +402,12 @@ class Scenario:
     @property
     def detector(self):
         """The plugin detector of the entry."""
-        return self.plugin_entry.runtime_data
+        return self.plugin_entry.runtime_data.detector
+
+    @property
+    def link(self):
+        """The plugin link (API calls) of the entry."""
+        return self.plugin_entry.runtime_data.link
 
 
 @pytest.fixture
@@ -412,6 +450,7 @@ __all__ = [
     "UNDERLYING_CLIMATE",
     "UNDERLYING_SWITCH",
     "WINDOW",
+    "FacadeCalls",
     "Scenario",
     "Underlyings",
     "climate_vt_entry",

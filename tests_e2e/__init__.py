@@ -3,7 +3,8 @@
 They load BOTH custom integrations in the Home Assistant test harness
 (pytest-homeassistant-custom-component). The core is taken from the checkout
 pointed to by the ``VTHERM_CORE_PATH`` environment variable (a
-``versatile_thermostat`` repository with inhibition support, issue #2087);
+``versatile_thermostat`` repository with inhibition support, issue #2087, or
+its ``custom_components`` directory);
 without it every module is skipped at collection.
 """
 
@@ -19,6 +20,9 @@ def _core_path() -> Path | None:
     if not value:
         return None
     path = Path(value).expanduser().resolve()
+    if path.name == "custom_components":
+        # The custom_components directory of the checkout is accepted too
+        path = path.parent
     if not (path / "custom_components" / "versatile_thermostat" / "manifest.json").is_file():
         return None
     return path
