@@ -1,4 +1,4 @@
-"""Bypass switch: while on, the provider reports a confirmed INACTIVE."""
+"""Bypass switch: while on, the status is a confirmed INACTIVE (the VTherm is released)."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ class InhibitionBypassSwitch(InhibitionEntity, SwitchEntity, RestoreEntity):
 
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, hass, detector, entry_id, title) -> None:
-        super().__init__(hass, detector, entry_id, title, "inhibition_bypass")
+    def __init__(self, hass, runtime, entry_id, title) -> None:
+        super().__init__(hass, runtime, entry_id, title, "inhibition_bypass")
 
     @property
     def is_on(self) -> bool:

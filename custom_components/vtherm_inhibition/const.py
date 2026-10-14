@@ -7,14 +7,7 @@ from homeassistant.const import Platform
 DOMAIN = "vtherm_inhibition"
 VT_DOMAIN = "versatile_thermostat"
 
-#: Stable provider / factory name registered in the VTherm API.
-PROVIDER_NAME = "vtherm_inhibition"
-
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SWITCH]
-
-# Keys of hass.data[DOMAIN]
-DATA_DETECTORS = "detectors"
-DATA_FACTORY = "factory"
 
 # Configuration keys (config entry data / options)
 CONF_VTHERM_ENTITY_ID = "vtherm_entity_id"
@@ -25,7 +18,10 @@ CONF_CLIMATE_HVAC_MODES = "climate_hvac_modes"
 CONF_ACTIVATION_DELAY = "activation_delay"
 CONF_DEACTIVATION_DELAY = "deactivation_delay"
 CONF_UNAVAILABLE_GRACE_PERIOD = "unavailable_grace_period"
-CONF_PHYSICAL_STOP_POLICY = "physical_stop_policy"
+CONF_STOP_UNDERLYINGS = "stop_underlyings"
+#: Option of config entry version 1, migrated to ``stop_underlyings``.
+CONF_LEGACY_PHYSICAL_STOP_POLICY = "physical_stop_policy"
+LEGACY_POLICY_DO_NOT_TURN_OFF = "do_not_turn_off"
 
 # Source domains accepted by the plugin.
 SOURCE_DOMAINS_ON_OFF = ("binary_sensor", "input_boolean", "switch")
@@ -39,8 +35,13 @@ DEFAULT_CLIMATE_HVAC_MODES = ["heat", "cool", "heat_cool", "auto", "dry"]
 DEFAULT_ACTIVATION_DELAY = 30
 DEFAULT_DEACTIVATION_DELAY = 60
 DEFAULT_UNAVAILABLE_GRACE_PERIOD = 300
-DEFAULT_PHYSICAL_STOP_POLICY = "turn_off"
+DEFAULT_STOP_UNDERLYINGS = True
 MAX_DELAY_SECONDS = 86400
+
+#: Delays (seconds) before the 1st, 2nd and 3rd retry of a failed API call;
+#: later retries run every RETRY_INTERVAL seconds.
+RETRY_DELAYS = (30, 60, 120)
+RETRY_INTERVAL = 300
 
 # Per-source contribution, exposed in the diagnostic attributes.
 SOURCE_ACTIVE = "active"

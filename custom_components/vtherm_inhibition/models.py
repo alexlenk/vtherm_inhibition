@@ -1,32 +1,51 @@
-"""Configuration model of one VTherm inhibition entry."""
+"""Statuses and configuration model of one VTherm inhibition entry."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
-
-from vtherm_api import InhibitionStopPolicy
-from vtherm_api.log_collector import get_vtherm_logger
 
 from .const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
     CONF_DEACTIVATION_DELAY,
-    CONF_PHYSICAL_STOP_POLICY,
+    CONF_LEGACY_PHYSICAL_STOP_POLICY,
     CONF_SOURCE_ENTITIES,
+    CONF_STOP_UNDERLYINGS,
     CONF_UNAVAILABLE_GRACE_PERIOD,
     CONF_VTHERM_ENTITY_ID,
     CONF_VTHERM_UNIQUE_ID,
     DEFAULT_ACTIVATION_DELAY,
     DEFAULT_CLIMATE_HVAC_MODES,
     DEFAULT_DEACTIVATION_DELAY,
-    DEFAULT_PHYSICAL_STOP_POLICY,
+    DEFAULT_STOP_UNDERLYINGS,
     DEFAULT_UNAVAILABLE_GRACE_PERIOD,
+    LEGACY_POLICY_DO_NOT_TURN_OFF,
     MAX_DELAY_SECONDS,
 )
 
-_LOGGER = get_vtherm_logger(__name__)
+
+class InhibitionStatus(StrEnum):
+    """Confirmed (or raw) inhibition status, owned by the plugin."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+class ApiCall(StrEnum):
+    """The two operations of the vtherm_api inhibition facade."""
+
+    SET = "set"
+    UNSET = "unset"
+
+
+def call_for(status: InhibitionStatus) -> ApiCall:
+    """``ACTIVE`` and ``UNKNOWN`` keep the VTherm inhibited; only ``INACTIVE`` releases it."""
+    return ApiCall.UNSET if status is InhibitionStatus.INACTIVE else ApiCall.SET
+
 
 #: Keys editable through the options flow.
 OPTION_KEYS = (
@@ -35,7 +54,7 @@ OPTION_KEYS = (
     CONF_ACTIVATION_DELAY,
     CONF_DEACTIVATION_DELAY,
     CONF_UNAVAILABLE_GRACE_PERIOD,
-    CONF_PHYSICAL_STOP_POLICY,
+    CONF_STOP_UNDERLYINGS,
 )
 
 
@@ -47,24 +66,22 @@ def default_options() -> dict[str, Any]:
         CONF_ACTIVATION_DELAY: DEFAULT_ACTIVATION_DELAY,
         CONF_DEACTIVATION_DELAY: DEFAULT_DEACTIVATION_DELAY,
         CONF_UNAVAILABLE_GRACE_PERIOD: DEFAULT_UNAVAILABLE_GRACE_PERIOD,
-        CONF_PHYSICAL_STOP_POLICY: DEFAULT_PHYSICAL_STOP_POLICY,
+        CONF_STOP_UNDERLYINGS: DEFAULT_STOP_UNDERLYINGS,
     }
 
 
-def normalize_policy(value: Any) -> InhibitionStopPolicy:
-    """Return the effective stop policy; ``TURN_OFF`` when unset or invalid."""
-    if isinstance(value, InhibitionStopPolicy):
-        return value
-    try:
-        return InhibitionStopPolicy(str(value).strip().lower())
-    except ValueError:
-        if value not in (None, ""):
-            _LOGGER.warning(
-                "Invalid physical stop policy %r, falling back to %s",
-                value,
-                InhibitionStopPolicy.TURN_OFF,
-            )
-        return InhibitionStopPolicy.TURN_OFF
+def migrate_v1_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace the version 1 ``physical_stop_policy`` by ``stop_underlyings``.
+
+    ``do_not_turn_off`` becomes ``False``; ``turn_off`` and any missing or
+    invalid value (treated as ``turn_off`` by version 1) become ``True``.
+    Settings without the old key are returned unchanged.
+    """
+    migrated = dict(settings)
+    if CONF_LEGACY_PHYSICAL_STOP_POLICY in migrated:
+        policy = str(migrated.pop(CONF_LEGACY_PHYSICAL_STOP_POLICY) or "").strip().lower()
+        migrated[CONF_STOP_UNDERLYINGS] = policy != LEGACY_POLICY_DO_NOT_TURN_OFF
+    return migrated
 
 
 def _seconds(value: Any, default: int) -> int:
@@ -87,7 +104,7 @@ class InhibitionConfig:
     activation_delay: int
     deactivation_delay: int
     unavailable_grace_period: int
-    physical_stop_policy: InhibitionStopPolicy
+    stop_underlyings: bool
 
     @classmethod
     def from_entry(cls, data: Mapping[str, Any], options: Mapping[str, Any] | None = None) -> InhibitionConfig:
@@ -103,6 +120,7 @@ class InhibitionConfig:
         modes = merged.get(CONF_CLIMATE_HVAC_MODES)
         if modes is None:
             modes = DEFAULT_CLIMATE_HVAC_MODES
+        stop_underlyings = merged.get(CONF_STOP_UNDERLYINGS)
         return cls(
             vtherm_unique_id=str(merged.get(CONF_VTHERM_UNIQUE_ID) or ""),
             vtherm_entity_id=str(merged.get(CONF_VTHERM_ENTITY_ID) or ""),
@@ -113,5 +131,5 @@ class InhibitionConfig:
             unavailable_grace_period=_seconds(
                 merged.get(CONF_UNAVAILABLE_GRACE_PERIOD), DEFAULT_UNAVAILABLE_GRACE_PERIOD
             ),
-            physical_stop_policy=normalize_policy(merged.get(CONF_PHYSICAL_STOP_POLICY)),
+            stop_underlyings=stop_underlyings if isinstance(stop_underlyings, bool) else DEFAULT_STOP_UNDERLYINGS,
         )

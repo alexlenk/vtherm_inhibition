@@ -17,7 +17,7 @@
           "activation_delay": "Aktivierungsverzögerung",
           "deactivation_delay": "Deaktivierungsverzögerung",
           "unavailable_grace_period": "Toleranzzeit bei Nichtverfügbarkeit",
-          "physical_stop_policy": "Bei Sperre"
+          "stop_underlyings": "Geräte beim Beginn der Sperre ausschalten"
         },
         "data_description": {
           "source_entities": "Binärsensoren, Input-Booleans und Schalter sperren, wenn sie an sind; Climate-Entitäten in einem der Modi unten. Eine aktive Quelle genügt.",
@@ -25,7 +25,7 @@
           "activation_delay": "Sekunden, die eine Quelle aktiv bleiben muss, bevor der VTherm zurücktritt.",
           "deactivation_delay": "Sekunden, die alle Quellen inaktiv bleiben müssen, bevor der VTherm wieder übernimmt.",
           "unavailable_grace_period": "Sekunden, in denen der letzte Status gehalten wird, solange eine Quelle nicht verfügbar ist, bevor er unbekannt wird.",
-          "physical_stop_policy": "Die Geräte des VTherm einmal ausschalten oder unverändert lassen."
+          "stop_underlyings": "An: Der VTherm schaltet seine Geräte beim Zurücktreten einmal aus. Aus: Er tritt zurück, ohne etwas zu senden; die Geräte bleiben, wie sie sind. Eine Änderung gilt ab der nächsten Sperre."
         }
       }
     },
@@ -50,7 +50,7 @@
           "activation_delay": "Aktivierungsverzögerung",
           "deactivation_delay": "Deaktivierungsverzögerung",
           "unavailable_grace_period": "Toleranzzeit bei Nichtverfügbarkeit",
-          "physical_stop_policy": "Bei Sperre"
+          "stop_underlyings": "Geräte beim Beginn der Sperre ausschalten"
         },
         "data_description": {
           "source_entities": "Binärsensoren, Input-Booleans und Schalter sperren, wenn sie an sind; Climate-Entitäten in einem der Modi unten. Eine aktive Quelle genügt.",
@@ -58,7 +58,7 @@
           "activation_delay": "Sekunden, die eine Quelle aktiv bleiben muss, bevor der VTherm zurücktritt.",
           "deactivation_delay": "Sekunden, die alle Quellen inaktiv bleiben müssen, bevor der VTherm wieder übernimmt.",
           "unavailable_grace_period": "Sekunden, in denen der letzte Status gehalten wird, solange eine Quelle nicht verfügbar ist, bevor er unbekannt wird.",
-          "physical_stop_policy": "Die Geräte des VTherm einmal ausschalten oder unverändert lassen."
+          "stop_underlyings": "An: Der VTherm schaltet seine Geräte beim Zurücktreten einmal aus. Aus: Er tritt zurück, ohne etwas zu senden; die Geräte bleiben, wie sie sind. Eine Änderung gilt ab der nächsten Sperre."
         }
       }
     },
@@ -78,12 +78,6 @@
         "dry": "Entfeuchten",
         "fan_only": "Nur Lüfter"
       }
-    },
-    "physical_stop_policy": {
-      "options": {
-        "turn_off": "Geräte ausschalten",
-        "do_not_turn_off": "Geräte nicht ausschalten"
-      }
     }
   },
   "entity": {
@@ -98,18 +92,10 @@
       }
     }
   },
-  "exceptions": {
-    "core_not_ready": {
-      "message": "Versatile Thermostat ist noch nicht geladen."
-    },
-    "core_without_inhibition": {
-      "message": "Das installierte Versatile Thermostat unterstützt keine Sperr-Provider. Aktualisiere es auf eine Version mit Sperr-Providern (jmcollin78/versatile_thermostat#2101)."
-    }
-  },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat ohne Sperr-Unterstützung",
-      "description": "VTherm-Sperre benötigt Versatile Thermostat mit Unterstützung für Sperr-Provider (erste Version mit jmcollin78/versatile_thermostat#2101) und vtherm_api 0.6.0 oder neuer. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
+      "description": "VTherm-Sperre benötigt die erste Version von Versatile Thermostat mit Inhibition (#2087) und vtherm_api 0.6.1 oder neuer. Das installierte Versatile Thermostat hat die Sperranfrage abgelehnt. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
     },
     "missing_sources": {
       "title": "Fehlende Sperrquellen",

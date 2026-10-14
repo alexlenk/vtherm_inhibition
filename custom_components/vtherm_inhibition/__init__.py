@@ -1,109 +1,49 @@
 """VTherm inhibition plugin: let another device take over a VTherm.
 
-One config entry per VTherm. Each entry owns an ``InhibitionDetector`` (source
-tracking, delays, grace period, bypass) and is exposed to the Versatile
-Thermostat core through a single inhibition provider factory registered in
-``vtherm_api`` while at least one entry is loaded.
+One config entry per VTherm. Each entry owns an ``InhibitionDetector``
+(sources, delays, grace period, bypass: the business status) and a
+``VThermLink`` that applies the confirmed status to the VTherm through the
+``vtherm_api`` facade (``set_inhibition`` / ``unset_inhibition``, issue #2087).
 """
 
 from __future__ import annotations
 
-import asyncio
+from dataclasses import dataclass
 
-from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.core import CoreState, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from vtherm_api.log_collector import get_vtherm_logger
 
-from .const import CONF_SOURCE_ENTITIES, DATA_DETECTORS, DOMAIN, PLATFORMS, VT_DOMAIN
+from .const import CONF_SOURCE_ENTITIES, CONF_VTHERM_ENTITY_ID, DOMAIN, PLATFORMS
 from .detector import InhibitionDetector
 from .entity import vtherm_device
-from .factory import async_register_factory, async_unregister_factory, core_supports_inhibition, get_core_api
-from .models import InhibitionConfig
+from .link import VThermLink, async_release_vtherm
+from .models import InhibitionConfig, migrate_v1_settings
 
 _LOGGER = get_vtherm_logger(__name__)
 
-type InhibitionConfigEntry = ConfigEntry[InhibitionDetector]
 
-ISSUE_CORE_WITHOUT_INHIBITION = "core_without_inhibition"
-DOCUMENTATION_URL = "https://github.com/alexlenk/vtherm_inhibition#prerequisites"
+@dataclass(slots=True)
+class InhibitionRuntime:
+    """Runtime objects of one entry."""
 
-#: Loop iterations given to the core's registration task before falling back
-#: to a VTherm reload (today's core attaches synchronously, in the first one).
-ATTACH_WAIT_ITERATIONS = 5
+    detector: InhibitionDetector
+    link: VThermLink
+
+
+type InhibitionConfigEntry = ConfigEntry[InhibitionRuntime]
 
 
 def _missing_sources_issue_id(entry_id: str) -> str:
     return f"missing_sources_{entry_id}"
 
 
-def _check_core(hass: HomeAssistant) -> None:
-    """Raise when Versatile Thermostat is not ready or lacks inhibition support."""
-    api = get_core_api(hass)
-    if api is None:
-        raise ConfigEntryNotReady(translation_domain=DOMAIN, translation_key="core_not_ready")
-    if not core_supports_inhibition(api):
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            ISSUE_CORE_WITHOUT_INHIBITION,
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key=ISSUE_CORE_WITHOUT_INHIBITION,
-            learn_more_url=DOCUMENTATION_URL,
-        )
-        raise ConfigEntryError(translation_domain=DOMAIN, translation_key=ISSUE_CORE_WITHOUT_INHIBITION)
-    ir.async_delete_issue(hass, DOMAIN, ISSUE_CORE_WITHOUT_INHIBITION)
-
-
-def _vtherm_config_entry_id(hass: HomeAssistant, config: InhibitionConfig) -> str | None:
-    """Return the config entry ID of the targeted VTherm, if it exists."""
-    registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(CLIMATE_DOMAIN, VT_DOMAIN, config.vtherm_unique_id)
-    if entity_id is not None:
-        registry_entry = registry.async_get(entity_id)
-        if registry_entry is not None and registry_entry.config_entry_id:
-            return registry_entry.config_entry_id
-    for vt_entry in hass.config_entries.async_entries(VT_DOMAIN):
-        if vt_entry.unique_id and vt_entry.unique_id == config.vtherm_unique_id:
-            return vt_entry.entry_id
-    return None
-
-
-async def async_reload_vtherm(hass: HomeAssistant, config: InhibitionConfig) -> None:
-    """Reload the targeted VTherm so the core (re)discovers the provider.
-
-    Only done while Home Assistant is running: at startup the core discovers
-    the factory itself in ``async_startup`` (after ``homeassistant_started``).
-    """
-    if hass.state is not CoreState.running:
-        return
-    entry_id = _vtherm_config_entry_id(hass, config)
-    if entry_id is None:
-        _LOGGER.debug("No loaded VTherm found for unique_id %s", config.vtherm_unique_id)
-        return
-    vt_entry = hass.config_entries.async_get_entry(entry_id)
-    if vt_entry is None or vt_entry.state is not ConfigEntryState.LOADED:
-        return
-    api = get_core_api(hass)
-    if api is None or not core_supports_inhibition(api):
-        return
-    _LOGGER.info("Reloading VTherm %s to apply the inhibition provider", config.vtherm_entity_id)
-    await hass.config_entries.async_reload(entry_id)
-    # The core may recreate the VThermAPI instance on reload: make sure the
-    # factory is still registered for later discoveries.
-    if hass.data.get(DOMAIN, {}).get(DATA_DETECTORS):
-        async_register_factory(hass)
-
-
 @callback
 def _async_sync_missing_sources_issue(hass: HomeAssistant, entry: InhibitionConfigEntry) -> None:
     """Show a repair issue while configured sources do not exist."""
-    missing = entry.runtime_data.missing_sources
+    missing = entry.runtime_data.detector.missing_sources
     issue_id = _missing_sources_issue_id(entry.entry_id)
     if missing:
         ir.async_create_issue(
@@ -131,9 +71,16 @@ def _async_rename_source(hass: HomeAssistant, entry: InhibitionConfigEntry, old:
 
 
 @callback
+def _async_rename_vtherm(hass: HomeAssistant, entry: InhibitionConfigEntry, new: str) -> None:
+    """Keep the stored entity ID of a renamed VTherm up to date (the unique ID is the reference)."""
+    if new and entry.data.get(CONF_VTHERM_ENTITY_ID) != new:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_VTHERM_ENTITY_ID: new})
+
+
+@callback
 def _async_remove_fallback_device(hass: HomeAssistant, entry: InhibitionConfigEntry) -> None:
     """Remove the plugin's own device once the entities live on the VTherm device."""
-    if vtherm_device(hass, entry.runtime_data) is None:
+    if vtherm_device(hass, entry.runtime_data.detector.config.vtherm_unique_id) is None:
         return
     registry = dr.async_get(hass)
     device = registry.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
@@ -143,16 +90,19 @@ def _async_remove_fallback_device(hass: HomeAssistant, entry: InhibitionConfigEn
 
 async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -> bool:
     """Set up the inhibition of one VTherm."""
-    _check_core(hass)
     config = InhibitionConfig.from_entry(entry.data, entry.options)
     detector = InhibitionDetector(hass, config, entry.title)
     detector.rename_handler = lambda old, new: _async_rename_source(hass, entry, old, new)
-    entry.runtime_data = detector
+    link = VThermLink(hass, detector, entry.title)
+    link.rename_handler = lambda new: _async_rename_vtherm(hass, entry, new)
+    entry.runtime_data = InhibitionRuntime(detector, link)
 
     # Entities restore the last confirmed status and the bypass before start.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_remove_fallback_device(hass, entry)
     await detector.async_start()
+    # Re-assert the restored (or first evaluated) status once the VTherm is available.
+    link.async_start()
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     reported_missing: list[tuple[str, ...] | None] = [None]
@@ -165,39 +115,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -
 
     entry.async_on_unload(detector.add_update_listener(_missing_sources_changed))
     _missing_sources_changed()
-
-    # Expose the detector to the core only once it is started: a core notified
-    # of the factory registration attaches the provider at once, and a detector
-    # without a confirmed status yet would withdraw the VTherm (UNKNOWN, with a
-    # precautionary stop) until its first evaluation.
-    detectors: dict[str, InhibitionDetector] = hass.data.setdefault(DOMAIN, {}).setdefault(DATA_DETECTORS, {})
-    detectors[config.vtherm_unique_id] = detector
-    async_register_factory(hass)
-
-    # A core notified of a new registration creates the provider from its
-    # notification task (synchronously with today's core). Give that task a
-    # few loop iterations; reload the VTherm only if no provider was created
-    # for it (factory already registered for another entry, or a core that
-    # does not attach on registration). Never both: no double attachment.
-    for _ in range(ATTACH_WAIT_ITERATIONS):
-        if detector.created_providers:
-            return True
-        await asyncio.sleep(0)
-    if not detector.created_providers:
-        await async_reload_vtherm(hass, config)
     return True
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: InhibitionConfigEntry) -> None:
-    """Apply changed options in place.
-
-    The entry is deliberately not reloaded: an unload makes the provider report
-    UNKNOWN (contract), and the core would then withdraw a VTherm that runs
-    normally and send it a precautionary stop. The running detector is
-    reconfigured instead; the attached provider stays attached and only a real
-    change of the confirmed status produces a transition.
-    """
-    detector = entry.runtime_data
+    """Apply changed options in place (no reload, no API call unless the status changes)."""
+    detector = entry.runtime_data.detector
     config = InhibitionConfig.from_entry(entry.data, entry.options)
     if config.vtherm_unique_id != detector.config.vtherm_unique_id:
         # The target VTherm cannot change through the options; reload to be safe.
@@ -207,37 +130,38 @@ async def _async_update_listener(hass: HomeAssistant, entry: InhibitionConfigEnt
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -> bool:
-    """Unload: attached providers report UNKNOWN, then detach.
+    """Unload without any API call: unloading never implies ``INACTIVE``.
 
-    The VTherm keeps its safe withdrawal until a provider confirms INACTIVE
-    again (on reload, the factory registration or ``async_setup_entry``
-    re-attaches a provider). Option changes do not unload. When the
-    entry is disabled or removed, the VTherm is reloaded without provider.
+    An inhibited VTherm stays inhibited until the entry is set up again and
+    confirms ``INACTIVE`` (reload, restart), or until the entry is removed.
     """
-    detector = entry.runtime_data
-    # Entities first, so they keep (and save for restore) the last confirmed
-    # status instead of the UNKNOWN caused by the stop.
+    # Entities first, so they save (for restore) the last confirmed status.
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
-    # Await UNKNOWN delivery to the core before the factory is unregistered.
-    await detector.async_stop()
-
-    data = hass.data.get(DOMAIN, {})
-    detectors: dict[str, InhibitionDetector] = data.get(DATA_DETECTORS, {})
-    if detectors.get(detector.config.vtherm_unique_id) is detector:
-        detectors.pop(detector.config.vtherm_unique_id)
-    if not detectors:
-        async_unregister_factory(hass)
+    runtime = entry.runtime_data
+    runtime.link.async_stop()
+    runtime.detector.async_stop()
     ir.async_delete_issue(hass, DOMAIN, _missing_sources_issue_id(entry.entry_id))
-
-    if entry.disabled_by is not None:
-        # Not eager: the VTherm reload must start after this unload has returned.
-        hass.async_create_task(
-            async_reload_vtherm(hass, detector.config), f"{DOMAIN} release VTherm", eager_start=False
-        )
     return True
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: InhibitionConfigEntry) -> None:
-    """Reload the VTherm without provider once its entry is deleted."""
-    await async_reload_vtherm(hass, InhibitionConfig.from_entry(entry.data, entry.options))
+    """Release the VTherm (``unset_inhibition``) once its entry is deleted."""
+    config = InhibitionConfig.from_entry(entry.data, entry.options)
+    await async_release_vtherm(hass, config.vtherm_unique_id, config.vtherm_entity_id, entry.title)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Version 1 -> 2: ``physical_stop_policy`` becomes the ``stop_underlyings`` boolean."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        hass.config_entries.async_update_entry(
+            entry,
+            data=migrate_v1_settings(entry.data),
+            options=migrate_v1_settings(entry.options),
+            version=2,
+            minor_version=1,
+        )
+        _LOGGER.info("%s - configuration migrated to version 2", entry.title)
+    return True

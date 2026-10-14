@@ -17,7 +17,7 @@
           "activation_delay": "Délai d'activation",
           "deactivation_delay": "Délai de désactivation",
           "unavailable_grace_period": "Délai de grâce si indisponible",
-          "physical_stop_policy": "À l'inhibition"
+          "stop_underlyings": "Éteindre les équipements au début de l'inhibition"
         },
         "data_description": {
           "source_entities": "Capteurs binaires, input_boolean et interrupteurs inhibent lorsqu'ils sont à on ; les entités climate dans l'un des modes ci-dessous. Une seule source active suffit.",
@@ -25,7 +25,7 @@
           "activation_delay": "Secondes pendant lesquelles une source doit rester active avant le retrait du VTherm.",
           "deactivation_delay": "Secondes pendant lesquelles toutes les sources doivent rester inactives avant la reprise.",
           "unavailable_grace_period": "Secondes pendant lesquelles le dernier état est conservé si une source est indisponible, avant de passer à inconnu.",
-          "physical_stop_policy": "Éteindre une fois les équipements du VTherm, ou les laisser en l'état."
+          "stop_underlyings": "Activé : le VTherm éteint une fois ses équipements lorsqu'il se retire. Désactivé : il se retire sans rien envoyer, les équipements restent en l'état. Un changement s'applique à partir de la prochaine inhibition."
         }
       }
     },
@@ -50,7 +50,7 @@
           "activation_delay": "Délai d'activation",
           "deactivation_delay": "Délai de désactivation",
           "unavailable_grace_period": "Délai de grâce si indisponible",
-          "physical_stop_policy": "À l'inhibition"
+          "stop_underlyings": "Éteindre les équipements au début de l'inhibition"
         },
         "data_description": {
           "source_entities": "Capteurs binaires, input_boolean et interrupteurs inhibent lorsqu'ils sont à on ; les entités climate dans l'un des modes ci-dessous. Une seule source active suffit.",
@@ -58,7 +58,7 @@
           "activation_delay": "Secondes pendant lesquelles une source doit rester active avant le retrait du VTherm.",
           "deactivation_delay": "Secondes pendant lesquelles toutes les sources doivent rester inactives avant la reprise.",
           "unavailable_grace_period": "Secondes pendant lesquelles le dernier état est conservé si une source est indisponible, avant de passer à inconnu.",
-          "physical_stop_policy": "Éteindre une fois les équipements du VTherm, ou les laisser en l'état."
+          "stop_underlyings": "Activé : le VTherm éteint une fois ses équipements lorsqu'il se retire. Désactivé : il se retire sans rien envoyer, les équipements restent en l'état. Un changement s'applique à partir de la prochaine inhibition."
         }
       }
     },
@@ -78,12 +78,6 @@
         "dry": "Déshumidification",
         "fan_only": "Ventilation"
       }
-    },
-    "physical_stop_policy": {
-      "options": {
-        "turn_off": "Éteindre les équipements",
-        "do_not_turn_off": "Ne pas éteindre les équipements"
-      }
     }
   },
   "entity": {
@@ -98,18 +92,10 @@
       }
     }
   },
-  "exceptions": {
-    "core_not_ready": {
-      "message": "Versatile Thermostat n'est pas encore chargé."
-    },
-    "core_without_inhibition": {
-      "message": "Le Versatile Thermostat installé ne prend pas en charge les fournisseurs d'inhibition. Mettez-le à jour vers une version qui les inclut (jmcollin78/versatile_thermostat#2101)."
-    }
-  },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat sans prise en charge de l'inhibition",
-      "description": "VTherm Inhibition nécessite Versatile Thermostat avec la prise en charge des fournisseurs d'inhibition (première version incluant jmcollin78/versatile_thermostat#2101) et vtherm_api 0.6.0 ou supérieur. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
+      "description": "VTherm Inhibition nécessite la première version de Versatile Thermostat incluant l'inhibition (#2087) et vtherm_api 0.6.1 ou supérieur. Le Versatile Thermostat installé a refusé la demande d'inhibition. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
     },
     "missing_sources": {
       "title": "Sources d'inhibition manquantes",

@@ -10,10 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
-from vtherm_api import InhibitionStatus
 
 from . import InhibitionConfigEntry
 from .entity import InhibitionEntity
+from .models import InhibitionStatus
 
 PARALLEL_UPDATES = 0
 
@@ -30,8 +30,8 @@ async def async_setup_entry(
 class InhibitionBinarySensor(InhibitionEntity, BinarySensorEntity, RestoreEntity):
     """``on`` = confirmed ACTIVE, ``off`` = confirmed INACTIVE, ``unknown`` = UNKNOWN."""
 
-    def __init__(self, hass, detector, entry_id, title) -> None:
-        super().__init__(hass, detector, entry_id, title, "inhibition")
+    def __init__(self, hass, runtime, entry_id, title) -> None:
+        super().__init__(hass, runtime, entry_id, title, "inhibition")
 
     @property
     def is_on(self) -> bool | None:
@@ -44,8 +44,8 @@ class InhibitionBinarySensor(InhibitionEntity, BinarySensorEntity, RestoreEntity
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the detector diagnostics."""
-        return self._detector.diagnostics()
+        """Return the business status and the state of the API calls."""
+        return {**self._detector.diagnostics(), **self._link.diagnostics()}
 
     async def async_added_to_hass(self) -> None:
         """Restore the last confirmed status (used during the grace period)."""

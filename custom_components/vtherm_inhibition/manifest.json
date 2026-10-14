@@ -13,9 +13,9 @@
     "iot_class": "calculated",
     "issue_tracker": "https://github.com/alexlenk/vtherm_inhibition/issues",
     "requirements": [
-        "vtherm_api>=0.6.0"
+        "vtherm_api>=0.6.1"
     ],
     "ssdp": [],
-    "version": "0.1.0",
+    "version": "0.2.0",
     "zeroconf": []
 }

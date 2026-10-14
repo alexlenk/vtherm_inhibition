@@ -1,16 +1,16 @@
 """Source detection, debounce, unavailable grace period and bypass.
 
 One ``InhibitionDetector`` exists per plugin config entry (that is, per
-VTherm). It lives as long as the config entry, independently of whether the
-VTherm core has attached a provider yet, so that the diagnostic entities and
-the debounce timers work from the first second.
+VTherm). It only computes the plugin's business status; ``VThermLink``
+(``link.py``) turns the confirmed status into calls to the VTherm API.
 
 Vocabulary used below:
 
 * **raw status**: the instantaneous aggregate of the sources (and bypass),
-  never published to the core;
-* **confirmed status**: the status published to the providers (and therefore
-  to the core) once the configured delays have elapsed.
+  never acted upon directly;
+* **confirmed status**: the status acted upon (``set_inhibition`` for
+  ``ACTIVE``/``UNKNOWN``, ``unset_inhibition`` for ``INACTIVE``) once the
+  configured delays have elapsed.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HassJob, HomeAssistant, State, callback
@@ -29,14 +29,10 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 from homeassistant.util import dt as dt_util
-from vtherm_api import InhibitionStatus, InhibitionStopPolicy
 from vtherm_api.log_collector import get_vtherm_logger
 
 from .const import SOURCE_ACTIVE, SOURCE_DOMAIN_CLIMATE, SOURCE_INACTIVE, SOURCE_UNAVAILABLE
-from .models import InhibitionConfig
-
-if TYPE_CHECKING:
-    from .provider import VThermInhibitionProvider
+from .models import InhibitionConfig, InhibitionStatus
 
 _LOGGER = get_vtherm_logger(__name__)
 
@@ -109,10 +105,8 @@ class InhibitionDetector:
         # Start of the current unavailability episode (see _update_episode).
         self._unavailable_since: datetime | None = None
         self._missing_sources: tuple[str, ...] = ()
-        self.created_providers = 0
         #: Called with (old_entity_id, new_entity_id) when a source is renamed.
         self.rename_handler: Callable[[str, str], None] | None = None
-        self._providers: list[VThermInhibitionProvider] = []
         self._update_listeners: list[Callable[[], None]] = []
         self._last_change: datetime | None = None
 
@@ -141,11 +135,6 @@ class InhibitionDetector:
     def raw_status(self) -> InhibitionStatus:
         """Return the instantaneous (unconfirmed) aggregate."""
         return self._raw
-
-    @property
-    def physical_stop_policy(self) -> InhibitionStopPolicy:
-        """Return the effective per-VTherm physical stop policy."""
-        return self._config.physical_stop_policy
 
     @property
     def bypass(self) -> bool:
@@ -183,9 +172,9 @@ class InhibitionDetector:
         return self._unavailable_since
 
     @property
-    def providers(self) -> list[VThermInhibitionProvider]:
-        """Return the providers currently attached to this detector."""
-        return list(self._providers)
+    def active_sources(self) -> list[str]:
+        """Return the sources currently contributing ``active``."""
+        return [source.entity_id for source in self.source_states if source.contribution == SOURCE_ACTIVE]
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -223,10 +212,10 @@ class InhibitionDetector:
         self._started = True
         self._subscribe()
         _LOGGER.info(
-            "%s - started with sources %s, policy %s",
+            "%s - started with sources %s, stop_underlyings %s",
             self,
             list(self._config.source_entities),
-            self._config.physical_stop_policy,
+            self._config.stop_underlyings,
         )
         self._evaluate()
 
@@ -259,7 +248,7 @@ class InhibitionDetector:
 
     @callback
     def async_reconfigure(self, config: InhibitionConfig) -> None:
-        """Apply new options in place, without stopping the attached providers.
+        """Apply new options in place, without reloading the entry.
 
         * The sources are re-subscribed and re-evaluated. A raw status change
           caused by the new sources or HVAC modes follows the normal rules
@@ -268,18 +257,18 @@ class InhibitionDetector:
         * A timer still running for the same target keeps its start time; its
           deadline becomes start + new delay (confirmed at once if already
           elapsed).
-        * The policy is read live by the providers: a policy-only change emits
-          no transition; the core captures the policy at the next entry.
+        * ``stop_underlyings`` is read when ``set_inhibition`` is called: a
+          change while the VTherm is inhibited applies from the next entry.
         """
         old_config = self._config
         if config == old_config:
             return
         self._config = config
         _LOGGER.info(
-            "%s - reconfigured: sources %s, policy %s",
+            "%s - reconfigured: sources %s, stop_underlyings %s",
             self,
             list(config.source_entities),
-            config.physical_stop_policy,
+            config.stop_underlyings,
         )
         if not self._started:
             self._publish()
@@ -314,35 +303,17 @@ class InhibitionDetector:
         self._timer_until = deadline
         self._timer_cancel = async_call_later(self._hass, (deadline - now).total_seconds(), self._timer_job)
 
-    async def async_stop(self) -> None:
-        """Stop the sources, then await every attached provider's ``UNKNOWN``."""
-        # No new transition can start once the sources and timers are stopped.
+    @callback
+    def async_stop(self) -> None:
+        """Stop watching the sources and cancel the timers.
+
+        The confirmed status is kept as it is: stopping (unload, reload)
+        never implies ``INACTIVE``.
+        """
         self._cancel_timer()
         self._unsubscribe()
         self._started = False
-        for provider in list(self._providers):
-            await provider.async_stop_listening()
-        self._providers.clear()
-        self._unavailable_since = None
-        self._status = InhibitionStatus.UNKNOWN
-        self._raw = InhibitionStatus.UNKNOWN
-        self._live = False
         _LOGGER.info("%s - stopped", self)
-        self._publish()
-
-    @callback
-    def attach_provider(self, provider: VThermInhibitionProvider) -> None:
-        """Attach a provider which receives the confirmed transitions."""
-        if provider not in self._providers:
-            self._providers.append(provider)
-            self._publish()
-
-    @callback
-    def detach_provider(self, provider: VThermInhibitionProvider) -> None:
-        """Detach a provider."""
-        if provider in self._providers:
-            self._providers.remove(provider)
-            self._publish()
 
     @callback
     def add_update_listener(self, listener: Callable[[], None]) -> CALLBACK_TYPE:
@@ -371,13 +342,6 @@ class InhibitionDetector:
             self._evaluate()
         else:
             self._publish()
-
-    @callback
-    def async_refresh(self) -> InhibitionStatus:
-        """Re-read every source and return the confirmed status."""
-        if self._started:
-            self._evaluate()
-        return self._status
 
     @callback
     def _async_source_changed(self, event: Event[EventStateChangedData]) -> None:
@@ -513,15 +477,13 @@ class InhibitionDetector:
 
     @callback
     def _confirm(self, new_status: InhibitionStatus) -> None:
-        """Publish a confirmed status to the attached providers."""
+        """Confirm a status and notify the listeners (link, entities)."""
         old_status = self._status
         self._status = new_status
         self._end_episode_if_confirmed()
         if new_status != old_status:
             self._last_change = dt_util.utcnow()
             _LOGGER.info("%s - confirmed status %s -> %s", self, old_status, new_status)
-            for provider in list(self._providers):
-                provider.on_confirmed_status(new_status)
         self._publish()
 
     @callback
@@ -537,8 +499,9 @@ class InhibitionDetector:
         return {
             "status": str(self._status),
             "raw_status": str(self._raw),
-            "physical_stop_policy": str(self._config.physical_stop_policy),
+            "stop_underlyings": self._config.stop_underlyings,
             "bypass": self._bypass,
+            "active_sources": self.active_sources,
             "pending_status": str(self._timer_target) if self._timer_target else None,
             "pending_until": self._timer_until.isoformat() if self._timer_until else None,
             "last_change": self._last_change.isoformat() if self._last_change else None,
@@ -548,10 +511,4 @@ class InhibitionDetector:
                 source.entity_id: {"state": source.state, "contribution": source.contribution}
                 for source in self.source_states
             },
-            "climate_hvac_modes": sorted(self._config.climate_hvac_modes),
-            "activation_delay": self._config.activation_delay,
-            "deactivation_delay": self._config.deactivation_delay,
-            "unavailable_grace_period": self._config.unavailable_grace_period,
-            "vtherm_entity_id": self._config.vtherm_entity_id,
-            "provider_attached": bool(self._providers),
         }

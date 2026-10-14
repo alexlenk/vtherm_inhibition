@@ -15,8 +15,8 @@ from .const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
     CONF_DEACTIVATION_DELAY,
-    CONF_PHYSICAL_STOP_POLICY,
     CONF_SOURCE_ENTITIES,
+    CONF_STOP_UNDERLYINGS,
     CONF_TARGET_ENTITY,
     CONF_UNAVAILABLE_GRACE_PERIOD,
     CONF_VTHERM_ENTITY_ID,
@@ -27,7 +27,8 @@ from .const import (
     SOURCE_DOMAINS,
     VT_DOMAIN,
 )
-from .models import OPTION_KEYS, default_options, normalize_policy
+from .link import resolve_vtherm_entity_id
+from .models import OPTION_KEYS, default_options
 
 
 def _seconds_selector() -> selector.NumberSelector:
@@ -116,25 +117,19 @@ def settings_schema(defaults: dict[str, Any], exclude: set[str] | None = None) -
             vol.Optional(
                 CONF_UNAVAILABLE_GRACE_PERIOD, default=defaults[CONF_UNAVAILABLE_GRACE_PERIOD]
             ): _seconds_selector(),
-            vol.Optional(CONF_PHYSICAL_STOP_POLICY, default=defaults[CONF_PHYSICAL_STOP_POLICY]): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["turn_off", "do_not_turn_off"],
-                    translation_key="physical_stop_policy",
-                    mode=selector.SelectSelectorMode.LIST,
-                )
-            ),
+            vol.Optional(CONF_STOP_UNDERLYINGS, default=defaults[CONF_STOP_UNDERLYINGS]): selector.BooleanSelector(),
         }
     )
 
 
 def _clean_settings(user_input: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the submitted settings (integers, valid policy)."""
+    """Normalize the submitted settings (integers, boolean)."""
     settings = {key: user_input[key] for key in OPTION_KEYS if key in user_input}
     for key in (CONF_ACTIVATION_DELAY, CONF_DEACTIVATION_DELAY, CONF_UNAVAILABLE_GRACE_PERIOD):
         if key in settings:
             settings[key] = int(settings[key])
-    if CONF_PHYSICAL_STOP_POLICY in settings:
-        settings[CONF_PHYSICAL_STOP_POLICY] = str(normalize_policy(settings[CONF_PHYSICAL_STOP_POLICY]))
+    if CONF_STOP_UNDERLYINGS in settings:
+        settings[CONF_STOP_UNDERLYINGS] = bool(settings[CONF_STOP_UNDERLYINGS])
     settings[CONF_SOURCE_ENTITIES] = list(dict.fromkeys(settings.get(CONF_SOURCE_ENTITIES) or []))
     return settings
 
@@ -153,7 +148,7 @@ def _validate_sources(hass: HomeAssistant, user_input: dict[str, Any], vtherm_en
 class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create one inhibition entry per VTherm."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the selected VTherm kept between steps."""
@@ -189,7 +184,7 @@ class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_settings(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Select the sources, delays and policy."""
+        """Select the sources, delays and the entry stop."""
         errors: dict[str, str] = {}
         defaults = default_options()
         if user_input is not None:
@@ -219,24 +214,27 @@ class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class InhibitionOptionsFlow(OptionsFlow):
-    """Edit the sources, delays and policy of an entry."""
+    """Edit the sources, delays and entry stop of an entry."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show and save the settings."""
         entry = self.config_entry
+        vtherm_entity_id = resolve_vtherm_entity_id(
+            self.hass, entry.data.get(CONF_VTHERM_UNIQUE_ID, ""), entry.data.get(CONF_VTHERM_ENTITY_ID, "")
+        )
         errors: dict[str, str] = {}
         defaults = default_options()
         defaults.update({key: value for key, value in entry.data.items() if key in OPTION_KEYS})
         defaults.update({key: value for key, value in entry.options.items() if key in OPTION_KEYS})
         if user_input is not None:
-            errors = _validate_sources(self.hass, user_input, entry.data.get(CONF_VTHERM_ENTITY_ID, ""))
+            errors = _validate_sources(self.hass, user_input, vtherm_entity_id)
             if not errors:
                 return self.async_create_entry(title="", data=_clean_settings(user_input))
             defaults.update(user_input)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=settings_schema(defaults, forbidden_sources(self.hass, entry.data.get(CONF_VTHERM_ENTITY_ID, ""))),
+            data_schema=settings_schema(defaults, forbidden_sources(self.hass, vtherm_entity_id)),
             errors=errors,
-            description_placeholders={"vtherm": entry.data.get(CONF_VTHERM_ENTITY_ID, "")},
+            description_placeholders={"vtherm": vtherm_entity_id},
         )

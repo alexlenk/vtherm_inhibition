@@ -17,7 +17,7 @@
           "activation_delay": "Activation delay",
           "deactivation_delay": "Deactivation delay",
           "unavailable_grace_period": "Unavailable grace period",
-          "physical_stop_policy": "On inhibition"
+          "stop_underlyings": "Turn the devices off when the inhibition starts"
         },
         "data_description": {
           "source_entities": "Binary sensors, input booleans and switches inhibit when on; climate entities when in one of the modes below. Any active source inhibits.",
@@ -25,7 +25,7 @@
           "activation_delay": "Seconds a source must stay active before the VTherm steps back.",
           "deactivation_delay": "Seconds all sources must stay inactive before the VTherm resumes.",
           "unavailable_grace_period": "Seconds the last status is kept while a source is unavailable before it becomes unknown.",
-          "physical_stop_policy": "Turn the VTherm's devices off once, or leave them as they are."
+          "stop_underlyings": "On: the VTherm turns its devices off once when it steps back. Off: it steps back without sending anything, the devices are left as they are. A change applies from the next inhibition."
         }
       }
     },
@@ -50,7 +50,7 @@
           "activation_delay": "Activation delay",
           "deactivation_delay": "Deactivation delay",
           "unavailable_grace_period": "Unavailable grace period",
-          "physical_stop_policy": "On inhibition"
+          "stop_underlyings": "Turn the devices off when the inhibition starts"
         },
         "data_description": {
           "source_entities": "Binary sensors, input booleans and switches inhibit when on; climate entities when in one of the modes below. Any active source inhibits.",
@@ -58,7 +58,7 @@
           "activation_delay": "Seconds a source must stay active before the VTherm steps back.",
           "deactivation_delay": "Seconds all sources must stay inactive before the VTherm resumes.",
           "unavailable_grace_period": "Seconds the last status is kept while a source is unavailable before it becomes unknown.",
-          "physical_stop_policy": "Turn the VTherm's devices off once, or leave them as they are."
+          "stop_underlyings": "On: the VTherm turns its devices off once when it steps back. Off: it steps back without sending anything, the devices are left as they are. A change applies from the next inhibition."
         }
       }
     },
@@ -78,12 +78,6 @@
         "dry": "Dry",
         "fan_only": "Fan only"
       }
-    },
-    "physical_stop_policy": {
-      "options": {
-        "turn_off": "Turn off the devices",
-        "do_not_turn_off": "Do not turn off the devices"
-      }
     }
   },
   "entity": {
@@ -98,18 +92,10 @@
       }
     }
   },
-  "exceptions": {
-    "core_not_ready": {
-      "message": "Versatile Thermostat is not loaded yet."
-    },
-    "core_without_inhibition": {
-      "message": "The installed Versatile Thermostat does not support inhibition providers. Update it to a release including inhibition providers (jmcollin78/versatile_thermostat#2101)."
-    }
-  },
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat without inhibition support",
-      "description": "VTherm Inhibition needs Versatile Thermostat with inhibition provider support (the first release including jmcollin78/versatile_thermostat#2101) and vtherm_api 0.6.0 or later. Update Versatile Thermostat, then restart Home Assistant."
+      "description": "VTherm Inhibition needs the first Versatile Thermostat release that includes inhibition (#2087) and vtherm_api 0.6.1 or later. The installed Versatile Thermostat refused the inhibition request. Update Versatile Thermostat, then restart Home Assistant."
     },
     "missing_sources": {
       "title": "Missing inhibition sources",
