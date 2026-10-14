@@ -4,17 +4,19 @@
 
 Home Assistant plugin that lets a [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) (VTherm) **step back while another device takes over** the room: an electric heater running on PV surplus, an air conditioner heating or cooling, a person heating manually at the valve...
 
-It implements the inhibition provider of [issue #2087](https://github.com/jmcollin78/versatile_thermostat/issues/2087) ("controlled VTherm withdrawal"). The plugin only **detects** the condition and reports a confirmed status; the Versatile Thermostat core does the rest: it resolves the effective HVAC mode to `OFF` (reason `hvac_off_inhibition`), suspends regulation and repair, sends at most one physical stop (depending on the policy below), and resumes the **current** requested state once the inhibition ends. The plugin never commands the VTherm or its underlying devices, and never changes the requested mode, preset or setpoint.
+It is the inhibition plugin of [issue #2087](https://github.com/jmcollin78/versatile_thermostat/issues/2087) ("controlled VTherm inhibition", design v2). The plugin owns the whole business logic: sources, delays, grace period, bypass, status, lifecycle and the entry-stop option. It tells Versatile Thermostat what to do through the two operations of the VTherm API, `set_inhibition(stop_underlyings)` and `unset_inhibition()`. The Versatile Thermostat core then resolves the effective HVAC mode to `OFF` (reason `hvac_off_inhibition`), stops regulating and repairing, blocks every command to its underlying devices (except the optional entry stop), and when the inhibition is released it reconciles the devices with the **current** requested state. The plugin never commands the underlying devices itself, and never changes the requested mode, preset or setpoint.
 
 ## How It Works
 
 For each configured VTherm, the plugin watches one or more **source** entities and computes a status:
 
-| Status | Meaning | Effect in VTherm |
+| Status | Meaning | Call to Versatile Thermostat |
 | --- | --- | --- |
-| `active` | Another device has taken over (confirmed). | Withdrawal, `OFF`, at most one stop. |
-| `inactive` | No source is active (confirmed). | Normal operation. |
-| `unknown` | The plugin cannot tell (sources unavailable for longer than the grace period, plugin stopped or reloading). | Safe withdrawal, no resumption until `inactive` is confirmed. |
+| `active` | Another device has taken over (confirmed). | `set_inhibition(stop_underlyings)` |
+| `inactive` | No source is active (confirmed). | `unset_inhibition()` |
+| `unknown` | The plugin cannot tell (sources unavailable for longer than the grace period). | `set_inhibition(stop_underlyings)`: the VTherm stays inhibited until `inactive` is confirmed. |
+
+Only **confirmed** statuses lead to a call; `unset_inhibition` is only called once `inactive` is confirmed.
 
 ### Sources
 
@@ -37,46 +39,54 @@ Sources are combined with a three-valued **OR**:
 
 ### Delays (debounce)
 
-Only confirmed statuses are reported to VTherm; a raw change and a running timer are never reported.
-
 - **Activation delay**: the aggregate must stay `active` for this long before `active` is confirmed.
 - **Deactivation delay**: the aggregate must stay `inactive` for this long before `inactive` is confirmed.
-- Any change of the aggregate cancels the running timer; if the new aggregate differs from the confirmed status a new timer starts from zero. Going back to the confirmed status before the timer ends (flapping) cancels it without any report.
+- Any change of the aggregate cancels the running timer; if the new aggregate differs from the confirmed status a new timer starts from zero. Going back to the confirmed status before the timer ends (flapping) cancels it without any call.
 - Attribute-only updates of a source (same state) do not restart a timer.
 - A zero delay confirms immediately.
 
 ### Unavailable grace period
 
-HomeKit bridges, Zigbee or Wi-Fi devices often drop to `unavailable` for a few seconds. When the aggregate becomes `unknown`, the plugin **keeps the last confirmed status** for the *unavailable grace period*; only after it expires is `unknown` reported. This is a deliberate plugin-side choice for sources with short dropouts (the VTherm contract would otherwise withdraw the VTherm, with a precautionary stop, on every dropout); set the grace period to `0` to report `unknown` at once.
+HomeKit bridges, Zigbee or Wi-Fi devices often drop to `unavailable` for a few seconds. When the aggregate becomes `unknown`, the plugin **keeps the last confirmed status** for the *unavailable grace period*; only after it expires is `unknown` confirmed (and the VTherm inhibited). Without it, every short dropout would inhibit the VTherm and, with the entry stop, turn its devices off. Set the grace period to `0` to confirm `unknown` at once.
 
-The grace period is measured from the **first** unavailability of an *unavailability episode*. The episode only ends once the aggregate is known again **and** confirmed (for example the source comes back with the confirmed status, or a new status has passed its delay). A source flapping between `unavailable` and another value therefore cannot hold a stale status beyond the grace period, and an entry reload or a restart during the episode does not grant a second grace period (the episode start is saved with the inhibition binary sensor). If the sources come back before, nothing is reported (same status) or the normal activation/deactivation delay starts from the moment they came back (different status). With a grace period of `0`, `unknown` is reported immediately. Recovery from a reported `unknown` also uses the activation/deactivation delay.
+The grace period is measured from the **first** unavailability of an *unavailability episode*. The episode only ends once the aggregate is known again **and** confirmed (for example the source comes back with the confirmed status, or a new status has passed its delay). A source flapping between `unavailable` and another value therefore cannot hold a stale status beyond the grace period, and an entry reload or a restart during the episode does not grant a second grace period (the episode start is saved with the inhibition binary sensor). If the sources come back before, nothing happens (same status) or the normal activation/deactivation delay starts from the moment they came back (different status). Recovery from a confirmed `unknown` also uses the activation/deactivation delay.
 
 ### Startup, restart and reload
 
-- The **first** known aggregate after the plugin starts (Home Assistant start, entry reload) is confirmed **immediately**, without the activation/deactivation delay, so VTherm can resume (or stay withdrawn) without waiting. Delays apply to every later change.
+- The **first** known aggregate after the plugin starts (Home Assistant start, entry reload) is confirmed **immediately**, without the activation/deactivation delay. Delays apply to every later change.
 - If the sources are not available yet at that moment, the status is `unknown`, unless the grace period is not `0` and a status was confirmed before the restart: that **restored** status (saved by the inhibition binary sensor) is then kept for at most the grace period, counted from the plugin start, or from the start of the unavailability episode that was already running before the reload/restart. The first live aggregate replaces it immediately.
 - The bypass switch keeps its state across restarts.
+- A restart or a reload never releases an inhibited VTherm by itself: the restored (or first evaluated) status is applied again, and `unset_inhibition` is only called once `inactive` is confirmed. See [Calls to Versatile Thermostat](#calls-to-versatile-thermostat).
 
 ### Bypass
 
-Each VTherm gets a **bypass switch**. While it is on, every source is ignored and the plugin reports a confirmed `inactive` **immediately** (pending timers are cancelled, unavailable sources do not matter): VTherm regulates normally. When it is turned off, the sources are evaluated again and the normal delays apply (for example, an active source is confirmed after the activation delay).
+Each VTherm gets a **bypass switch**. While it is on, every source is ignored and the status is a confirmed `inactive` **immediately** (pending timers are cancelled, unavailable sources do not matter): the VTherm is released and regulates normally. When it is turned off, the sources are evaluated again and the normal delays apply (for example, an active source is confirmed after the activation delay).
 
-### Physical stop policy
+### Entry stop (`stop_underlyings`)
 
-| Value | Behavior on inhibition |
+| Value | Behavior when the inhibition starts |
 | --- | --- |
-| `turn_off` (default) | VTherm withdraws and turns its underlying devices off once. |
-| `do_not_turn_off` | VTherm withdraws (effective mode `OFF`, no regulation, no repair) but sends no `turn_off`: the devices are left as they are, e.g. a valve a person is controlling by hand. |
+| on (default) | The VTherm steps back and turns its underlying devices off once. |
+| off | The VTherm steps back (effective mode `OFF`, no regulation, no repair, no command) but sends nothing: the devices are left as they are, e.g. a valve a person is controlling by hand. |
 
-Any missing or invalid value is treated as `turn_off`. The policy is also applied by VTherm to the precautionary stop it may send while the status is `unknown`.
+The option is passed to `set_inhibition` when an inhibition starts. Changing it while the VTherm is inhibited makes no call: it applies from the next inhibition.
+
+## Calls to Versatile Thermostat
+
+- The VTherm is identified by its stable unique ID and resolved to its **current** entity ID at every call: renaming the VTherm entity is followed (the entry is updated).
+- Calls are only made while the VTherm is available: its entity exists and has started (state attribute `is_ready: true`). Calling earlier would make the core skip the inhibition state it restores after a restart. While the VTherm is not available, the pending call is shown by the `retry_pending` attribute and made as soon as it is.
+- Each time the VTherm becomes available (Home Assistant start, VTherm reload) and each time the plugin entry is set up (reload, restart), the call matching the current status is made again: `set_inhibition` is idempotent in the core (no second stop) and `unset_inhibition` does nothing outside an inhibition.
+- Statuses asking for the same call (`active` ↔ `unknown`) make no new call.
+- Calls never overlap: a status change during a call is applied right after it.
+- **Failures and retries**: when a call fails (for example the core could not reconcile the devices when leaving the inhibition: it raises and keeps the VTherm inhibited), it is retried after 30 s, 60 s, 120 s, then every 5 minutes, as long as the status still asks for the same call. A status change cancels the retry and makes the new call. A Versatile Thermostat without inhibition support refuses the call: a repair issue is raised and the call is made again when the VTherm restarts.
 
 ## Prerequisites
 
 - Home Assistant 2026.7.1 or later.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) **≥ the first release including [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)** (inhibition providers, issue #2087), not released yet. Versatile Thermostat 10.5.1 and older do not support inhibition providers.
-- `vtherm_api` **≥ 0.6.0** (released on PyPI, installed automatically).
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat): **the first Versatile Thermostat release that includes inhibition (#2087)** ([#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)), not released yet. Older releases do not support inhibition.
+- `vtherm_api` **≥ 0.6.1** (released on PyPI, installed automatically).
 
-The plugin cannot work before that Versatile Thermostat release. With an older Versatile Thermostat, the entry fails to set up with an explicit error and a repair issue explains the minimum versions; the VTherms are left untouched. While Versatile Thermostat is not loaded yet, the setup is retried.
+With an older Versatile Thermostat the entries load, but the core refuses the calls: a repair issue explains the minimum versions and the VTherms are left untouched.
 
 ## Installation
 
@@ -93,27 +103,31 @@ The plugin cannot work before that Versatile Thermostat release. With an older V
 2. Restart Home Assistant.
 3. Add `VTherm Inhibition` from **Settings > Devices & services**.
 
+### Upgrading from 0.1.x
+
+Entries are migrated automatically: the former *physical stop policy* `turn_off` (or no value) becomes `stop_underlyings: on`, `do_not_turn_off` becomes `stop_underlyings: off`.
+
 ## Configuration
 
 Add one integration entry **per VTherm**: first select the Versatile Thermostat, then its sources and settings. Everything except the VTherm can be changed later with **Configure**.
 
 | Option (key) | Type | Default | Description |
 | --- | --- | --- | --- |
-| Versatile Thermostat (`target_entity`) | climate entity of `versatile_thermostat` | required | The VTherm to inhibit. Stored by its stable unique ID (`vtherm_unique_id`) and entity ID (`vtherm_entity_id`). One entry per VTherm. |
+| Versatile Thermostat (`target_entity`) | climate entity of `versatile_thermostat` | required | The VTherm to inhibit. Stored by its stable unique ID (`vtherm_unique_id`) and entity ID (`vtherm_entity_id`, kept up to date). One entry per VTherm. |
 | Sources (`source_entities`) | list of `binary_sensor` / `input_boolean` / `switch` / `climate` | required, at least one | OR-combined sources. The VTherm itself is refused. |
 | Inhibiting HVAC modes (`climate_hvac_modes`) | list among `heat`, `cool`, `heat_cool`, `auto`, `dry`, `fan_only` | `heat`, `cool`, `heat_cool`, `auto`, `dry` | Used for `climate` sources only. |
 | Activation delay (`activation_delay`) | seconds, 0–86400 | `30` | Debounce before `active` is confirmed. |
 | Deactivation delay (`deactivation_delay`) | seconds, 0–86400 | `60` | Debounce before `inactive` is confirmed. |
 | Unavailable grace period (`unavailable_grace_period`) | seconds, 0–86400 | `300` | How long the last confirmed status is kept while sources are unavailable. |
-| On inhibition (`physical_stop_policy`) | `turn_off` / `do_not_turn_off` | `turn_off` | Physical stop policy, see above. |
+| Turn the devices off when the inhibition starts (`stop_underlyings`) | boolean | on | Entry stop, see above. |
 
-Saving the options applies them **in place**, without reloading the entry or the VTherm and without any command to the devices (see [Lifecycle](#lifecycle)).
+Saving the options applies them **in place**, without reloading the entry or the VTherm. Nothing is called unless the confirmed status changes.
 
 ### Examples
 
-- **Electric heater on PV surplus in the bathroom**: source `climate.bathroom_electric_heater_heater`, inhibiting modes `heat`, policy `turn_off`.
-- **Room with an air conditioner** (heats on cheap/solar power, cools in the evening): source `climate.<room>_ac`, default inhibiting modes (`heat`, `cool`, `heat_cool`, `auto`, `dry`), policy `turn_off`.
-- **Office where someone heats manually at the valve**: an `input_boolean` (or any binary sensor detecting the manual mode) as source, policy `do_not_turn_off` so that the valve is not turned off.
+- **Electric heater on PV surplus in the bathroom**: source `climate.bathroom_electric_heater_heater`, inhibiting modes `heat`, entry stop on.
+- **Room with an air conditioner** (heats on cheap/solar power, cools in the evening): source `climate.<room>_ac`, default inhibiting modes (`heat`, `cool`, `heat_cool`, `auto`, `dry`), entry stop on.
+- **Office where someone heats manually at the valve**: an `input_boolean` (or any binary sensor detecting the manual mode) as source, entry stop off so that the valve is not turned off.
 - **Replacing a "heating blocked" template binary sensor used as VTherm window sensor**: use that binary sensor (or directly the climate entities it was built from) as a source here and give the VTherm window feature back to a real window contact or to the automatic window detection.
 
 ## Entities
@@ -131,30 +145,39 @@ Attributes of the binary sensor:
 | --- | --- |
 | `status` | Confirmed status: `active`, `inactive` or `unknown`. |
 | `raw_status` | Current aggregate, before delays. |
+| `stop_underlyings` | Entry stop option passed to the next `set_inhibition`. |
+| `bypass` | Bypass switch state. |
+| `active_sources` | Sources currently active. |
+| `sources` | Per source: its `state` and its `contribution` (`active`, `inactive`, `unavailable`). |
 | `pending_status`, `pending_until` | Status a running timer will confirm, and when (UTC). `null` when no timer runs. |
 | `last_change` | Time of the last confirmed change. |
-| `sources` | Per source: its `state` and its `contribution` (`active`, `inactive`, `unavailable`). |
-| `bypass` | Bypass switch state. |
-| `physical_stop_policy` | Effective policy. |
-| `climate_hvac_modes`, `activation_delay`, `deactivation_delay`, `unavailable_grace_period` | Effective settings. |
-| `vtherm_entity_id` | Targeted VTherm. |
-| `provider_attached` | `true` once VTherm has attached the provider. |
 | `unavailable_since` | Start of the current unavailability episode (UTC), `null` outside one. |
 | `missing_sources` | Configured sources that no longer exist. |
+| `vtherm_entity_id` | Current entity ID of the targeted VTherm. |
+| `vtherm_available` | `true` while the VTherm exists and has started. |
+| `last_api_call`, `last_api_call_at` | Last call made (`set` or `unset`) and when (UTC). |
+| `last_error` | Error of the last call, `null` once a call succeeded. |
+| `retry_pending` | `true` while the call matching the status has not succeeded yet (VTherm not available, or retry scheduled). |
+| `next_retry_at` | When the next retry runs (UTC), `null` when none is scheduled. |
+
+Versatile Thermostat publishes its own side under the `specific_states.inhibition` attribute of the VTherm (inhibited, command gate, entry stop requested/completed, last error code).
 
 ## Lifecycle
 
-- The provider factory is registered in the VTherm API when the first entry is set up and unregistered when the last entry is unloaded. It accepts a VTherm only if an entry targets its unique ID (its entity ID is used only when the VTherm runtime has no unique ID).
-- At Home Assistant startup, VTherm discovers the factory itself (its `async_startup` runs after Home Assistant has started).
-- When an entry is added or re-enabled while Home Assistant is running, the plugin first starts watching its sources, then registers the factory: VTherm attaches the provider at once and gets a confirmed status right away. If VTherm has not created a provider for it shortly after (factory already registered for another entry, or a core that does not attach on registration), the plugin reloads the targeted VTherm instead so that it attaches the provider.
-- **Options change**: applied in place to the running entry; the provider stays attached and reports nothing unless its confirmed status really changes. A raw status change caused by the new sources or HVAC modes follows the normal rules (activation/deactivation delay, grace period). A timer already running keeps its start time and its deadline follows the new delay (confirmed at once if already elapsed). A policy-only change reports nothing: VTherm reads the policy when an inhibition starts and keeps the one captured at entry until the exit. Entities reflect the new settings immediately.
-- When an entry is unloaded or reloaded (e.g. **Reload** in the UI), the attached provider delivers `unknown` to VTherm and waits until VTherm has handled it, then detaches; only then is the factory unregistered: VTherm stays safely withdrawn until a provider confirms `inactive`. When an entry is **deleted or disabled**, the VTherm is reloaded without provider and works as before.
-- Consequence for a VTherm that is **not** inhibited at that moment: with the `turn_off` policy, this `unknown` makes VTherm send its precautionary stop, so the device is turned off briefly and back on once the new provider confirms `inactive` (reload) or once the VTherm is reloaded without provider (deletion, disabling). Saving the options does not do this.
+- **Options change**: applied in place to the running entry. A raw status change caused by the new sources or HVAC modes follows the normal rules (activation/deactivation delay, grace period). A timer already running keeps its start time and its deadline follows the new delay (confirmed at once if already elapsed). A change of `stop_underlyings` applies from the next inhibition. Entities reflect the new settings immediately.
+- **Entry reload or Home Assistant restart**: unloading makes no call, so an inhibited VTherm stays inhibited. When the entry is set up again it restores its status and bypass and makes the matching call again once the VTherm is available.
+- **Entry unloaded or disabled**: no call is made; an inhibited VTherm **stays inhibited** (unloading never means `inactive`). Turn the bypass on before disabling the entry if the VTherm must resume, or delete the entry.
+- **Entry deleted**: `unset_inhibition` is called, the VTherm is released and works as before (if Versatile Thermostat is not running at that moment, a warning is logged; see below).
+- **VTherm reload**: the core restores its inhibition state; the plugin makes the matching call again once the VTherm has started.
+
+### Recovery if the plugin is removed while a VTherm is inhibited
+
+Versatile Thermostat keeps an inhibition across restarts until a plugin releases it. If the plugin's code is removed (uninstalled) while one of its entries still inhibits a VTherm, that VTherm stays inhibited. To release it: reinstall the plugin, restart Home Assistant, then delete the plugin's entry for that VTherm; the deletion calls `unset_inhibition`. Deleting the entries **before** uninstalling the plugin avoids this.
 
 ## Limitations
 
-- One inhibition provider per VTherm (V1 of the VTherm design); combine several sources in one entry instead.
-- The plugin does not command any device: it only tells VTherm when to step back.
+- One inhibition entry per VTherm; combine several sources in one entry instead.
+- The plugin does not command any device: it only tells Versatile Thermostat when to step back and when to resume.
 
 ## Development
 
@@ -163,11 +186,11 @@ pip install -r requirements_test.txt
 pytest -q tests
 ```
 
-The tests use a fake VTherm core that only relies on the `vtherm_api` contract.
+The unit tests use a fake core API that records the `set_inhibition` / `unset_inhibition` calls.
 
 ### End-to-end tests
 
-`tests_e2e/` runs this plugin together with the **real** Versatile Thermostat core (inhibition support, issue #2087) in the Home Assistant test harness: real VTherms (over_climate, over_switch TPI) with mock underlying devices, real plugin entries, timers, reloads and simulated restarts. The core is taken from a local checkout; its test requirements (`requirements_dev.txt` of the core) must be installed in the same environment:
+`tests_e2e/` runs this plugin together with the **real** Versatile Thermostat core (inhibition support, issue #2087) in the Home Assistant test harness: real VTherms (over_climate, over_switch TPI) with mock underlying devices, real plugin entries, timers, reloads and simulated restarts; the service calls reaching the devices are counted. The core is taken from a local checkout (its repository or its `custom_components` directory); its test requirements (`requirements_dev.txt` of the core) must be installed in the same environment:
 
 ```bash
 VTHERM_CORE_PATH=/path/to/versatile_thermostat pytest -q tests_e2e
