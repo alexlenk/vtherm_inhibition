@@ -77,7 +77,7 @@ The option is passed to `set_inhibition` when an inhibition starts. Changing it 
 - Calls are made once the VTherm entity exists and the VTherm has restored its state at startup (the core refuses calls before). The plugin does not wait for the VTherm to be ready (every underlying reporting a state): the core holds the entry stop and the exit reconciliation until then. A VTherm that was inhibited before a restart stays inhibited through its restored state (no second entry stop); one that was not starts normally until the plugin's `set` arrives (it checks at each VTherm state change and every 5 seconds). While the plugin waits, `waiting_for_vtherm_start` is `true`; while the VTherm entity does not exist, the pending call is shown by the `retry_pending` attribute and made as soon as it appears.
 - Each time the VTherm becomes available (Home Assistant start, VTherm reload) and each time the plugin entry is set up (reload, restart), the call matching the current status is made again: `set_inhibition` is idempotent in the core (no second stop) and `unset_inhibition` does nothing outside an inhibition.
 - Statuses asking for the same call (`active` ↔ `unknown`) make no new call.
-- The plugin also checks the inhibition state the VTherm publishes (`specific_states.inhibition`) against its last successful call. When `unset_inhibition` reaches a VTherm that has not finished starting, the core accepts it and reconciles later; if that later reconciliation fails, the VTherm is inhibited again. The plugin then sees an inhibited VTherm although it confirmed `inactive`, and retries `unset_inhibition` like a failed call. Likewise a VTherm that reports itself not inhibited after a successful `set_inhibition` is set again.
+- The plugin also checks the inhibition state the VTherm publishes (`specific_states.inhibition`) against its last successful call. When `unset_inhibition` reaches a VTherm that has started but is not ready yet (an underlying has not reported a state), the core accepts it and reconciles once ready; if that later reconciliation fails, the VTherm is inhibited again. The plugin then sees an inhibited VTherm although it confirmed `inactive`, and retries `unset_inhibition` like a failed call. Likewise a VTherm that reports itself not inhibited after a successful `set_inhibition` is set again.
 - Calls never overlap: a status change during a call is applied right after it.
 - **Failures and retries**: when a call fails (for example the core could not reconcile the devices when leaving the inhibition: it raises and keeps the VTherm inhibited), it is retried after 30 s, 60 s, 120 s, then every 5 minutes, as long as the status still asks for the same call. A status change cancels the retry and makes the new call. If `unset_inhibition` still fails after the 3rd retry, a repair issue tells that the VTherm stays inhibited; it disappears on success or when the status changes. A Versatile Thermostat without inhibition support (the VTherm entity has no inhibition operations) is reported by a repair issue and the call is made again when the VTherm restarts; any other error, including an error inside the core, is retried.
 
@@ -158,7 +158,7 @@ Attributes of the binary sensor:
 | `vtherm_available` | `true` while the VTherm entity exists. |
 | `last_api_call`, `last_api_call_at` | Last call made (`set` or `unset`) and when (UTC). |
 | `last_error` | Error of the last call, `null` once a call succeeded. |
-| `retry_pending` | `true` while the call matching the status has not succeeded yet (VTherm not available, or retry scheduled). |
+| `retry_pending` | `true` while the call matching the status has not succeeded yet (VTherm not available or not started, or retry scheduled). |
 | `next_retry_at` | When the next retry runs (UTC), `null` when none is scheduled. |
 | `waiting_for_vtherm_start` | `true` while the call waits for the VTherm to restore its state at startup. |
 
@@ -167,10 +167,10 @@ Versatile Thermostat publishes its own side under the `specific_states.inhibitio
 ## Lifecycle
 
 - **Options change**: applied in place to the running entry. A raw status change caused by the new sources or HVAC modes follows the normal rules (activation/deactivation delay, grace period). A timer already running keeps its start time and its deadline follows the new delay (confirmed at once if already elapsed). A change of `stop_underlyings` applies from the next inhibition. Entities reflect the new settings immediately.
-- **Entry reload or Home Assistant restart**: unloading makes no call, so an inhibited VTherm stays inhibited. When the entry is set up again it restores its status and bypass and makes the matching call again once the VTherm is available.
+- **Entry reload or Home Assistant restart**: unloading makes no call, so an inhibited VTherm stays inhibited. When the entry is set up again it restores its status and bypass and makes the matching call again once the VTherm is available and has started.
 - **Entry unloaded or disabled**: no call is made; an inhibited VTherm **stays inhibited** (unloading never means `inactive`). Turn the bypass on before disabling the entry if the VTherm must resume, or delete the entry.
-- **Entry deleted**: `unset_inhibition` is called, the VTherm is released and works as before If this call fails (for example Versatile Thermostat is not loaded), a repair issue says that the VTherm may stay inhibited and how to release it (see below); it disappears once an entry for this VTherm is set up again.
-- **VTherm reload**: the core restores its inhibition state; the plugin makes the matching call again as soon as the VTherm entity is back.
+- **Entry deleted**: `unset_inhibition` is called, the VTherm is released and works as before. If the VTherm has not started yet (Home Assistant starting), the call is made once it has, at most 5 minutes later. If this call fails (for example Versatile Thermostat is not loaded), a repair issue says that the VTherm may stay inhibited and how to release it (see below); it disappears once an entry for this VTherm is set up again.
+- **VTherm reload**: the core restores its inhibition state; the plugin makes the matching call again once the VTherm entity is back and has restored its state.
 
 ### Recovery if the plugin is removed while a VTherm is inhibited
 

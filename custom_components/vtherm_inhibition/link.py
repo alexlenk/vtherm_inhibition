@@ -61,7 +61,7 @@ from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
 from vtherm_api.const import VTHERM_API_NAME
 from vtherm_api.log_collector import get_vtherm_logger
 
-from .const import DOMAIN, RETRY_DELAYS, RETRY_INTERVAL, START_POLL_INTERVAL, VT_DOMAIN
+from .const import DOMAIN, RELEASE_START_TIMEOUT, RETRY_DELAYS, RETRY_INTERVAL, START_POLL_INTERVAL, VT_DOMAIN
 from .detector import InhibitionDetector
 from .models import ApiCall, call_for
 
@@ -121,7 +121,8 @@ def _find_vtherm_entity(hass: HomeAssistant, entity_id: str) -> Any:
 
 def vtherm_started(hass: HomeAssistant, entity_id: str) -> bool:
     """True once the VTherm restored its inhibition state at startup. An entity that is
-    not found is reported started: the call then fails like the facade does."""
+    not found is reported started (the call then fails like the facade does), and so is a
+    core without ``inhibition_manager.is_restored`` (it accepts calls at any time)."""
     manager = getattr(_find_vtherm_entity(hass, entity_id), "inhibition_manager", None)
     return getattr(manager, "is_restored", True) is not False
 
@@ -426,7 +427,9 @@ class VThermLink:
                 # wanted call is always made, even if it equals the last applied one.
                 self._applied = None
                 if _is_not_started_error(err):
-                    # Restarted between the check and the call: wait for its startup again.
+                    # Defensive: the check above and the core's own check see the same entity
+                    # with nothing awaited in between, so this only happens with a core that
+                    # raises it without exposing is_restored. Wait for the startup.
                     self._wait_for_start()
                     break
                 self._last_error = _format_error(err)
@@ -449,6 +452,8 @@ class VThermLink:
     @callback
     def _wait_for_start(self) -> None:
         """Check again at the next VTherm state change, or after START_POLL_INTERVAL."""
+        if not self._started or not self._available:
+            return
         if not self._waiting_start:
             _LOGGER.info("%s - waiting for %s to start before %s_inhibition", self, self._entity_id, self._wanted)
         self._waiting_start = True
@@ -570,9 +575,14 @@ def release_issue_id(unique_id: str, entity_id: str) -> str:
     return f"{ISSUE_RELEASE_FAILED}_{unique_id or entity_id}"
 
 
-async def async_release_vtherm(hass: HomeAssistant, unique_id: str, fallback_entity_id: str, name: str) -> None:
+async def async_release_vtherm(
+    hass: HomeAssistant, unique_id: str, fallback_entity_id: str, name: str, wait_for_start: bool = True
+) -> None:
     """Call ``unset_inhibition`` once (entry removal).
 
+    If the VTherm has not restored its state yet (Home Assistant or VTherm
+    starting), the call is made once it has, checked every START_POLL_INTERVAL
+    for at most RELEASE_START_TIMEOUT; the removal does not wait for it.
     A failure raises a persistent repair issue (the entry is gone, nothing will
     retry): the VTherm may stay inhibited. It is removed when an entry for this
     VTherm is set up again.
@@ -580,6 +590,10 @@ async def async_release_vtherm(hass: HomeAssistant, unique_id: str, fallback_ent
     entity_id = resolve_vtherm_entity_id(hass, unique_id, fallback_entity_id)
     if not entity_id:
         _LOGGER.info("VThermInhibition-%s - the VTherm does not exist any more, nothing to release", name)
+        return
+    if wait_for_start and not vtherm_started(hass, entity_id):
+        _LOGGER.info("VThermInhibition-%s - %s has not started yet, released once it has", name, entity_id)
+        _schedule_release_when_started(hass, unique_id, fallback_entity_id, name)
         return
     try:
         await async_call_api(hass, ApiCall.UNSET, entity_id, False)
@@ -604,3 +618,24 @@ async def async_release_vtherm(hass: HomeAssistant, unique_id: str, fallback_ent
         )
     else:
         _LOGGER.info("VThermInhibition-%s - %s released (entry removed)", name, entity_id)
+
+
+@callback
+def _schedule_release_when_started(hass: HomeAssistant, unique_id: str, fallback_entity_id: str, name: str) -> None:
+    """Release the VTherm once it has started, or after RELEASE_START_TIMEOUT anyway."""
+    checks_left = RELEASE_START_TIMEOUT // START_POLL_INTERVAL
+
+    @callback
+    def _check(_now: datetime) -> None:
+        nonlocal checks_left
+        checks_left -= 1
+        entity_id = resolve_vtherm_entity_id(hass, unique_id, fallback_entity_id)
+        if entity_id and checks_left > 0 and not vtherm_started(hass, entity_id):
+            async_call_later(hass, START_POLL_INTERVAL, _check)
+            return
+        hass.async_create_task(
+            async_release_vtherm(hass, unique_id, fallback_entity_id, name, wait_for_start=False),
+            f"VThermInhibition-{name} release",
+        )
+
+    async_call_later(hass, START_POLL_INTERVAL, _check)

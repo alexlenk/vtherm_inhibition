@@ -184,6 +184,7 @@ async def test_startup(
     else:
         assert_inhibited(sc)
         assert underlyings.hvac_modes() == ["heat", "off"]
+        assert underlyings.temperatures() == [21.0]
         assert names(facade_calls) == ["set"]
 
 

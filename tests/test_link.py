@@ -168,8 +168,8 @@ async def test_restart_restored_active_is_reasserted(hass: HomeAssistant, vtherm
 
 async def test_waits_for_the_vtherm_entity(hass: HomeAssistant, core_api, setup_plugin, advance) -> None:
     """Plugin set up before the VTherm entity exists (not even registered): no call until it
-    exists; then called at once, without waiting for the VTherm startup (the core merges an
-    early set with its restored state)."""
+    exists; then called at once (this fake has no core entity, so the VTherm counts as
+    started; waiting for the startup restore is tested below)."""
     hass.states.async_set(HEATER, "on")
     hass.states.async_set(VT_ENTITY_ID, "heat")  # another entity with the stored entity ID: not used
     entry = await setup_plugin([HEATER])
@@ -682,3 +682,85 @@ async def test_lost_inhibition_is_set_again(hass: HomeAssistant, vtherm, core_ap
     assert _attrs(hass)["retry_pending"] is True
     await advance(30)
     assert core_api.names == ["set", "set"]
+
+
+async def test_unavailable_while_waiting_for_startup(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """The VTherm disappears while the plugin waits for its startup: the wait stops; the
+    reappeared VTherm (a new instance) is waited for again, then called."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    assert _attrs(hass)["waiting_for_vtherm_start"] is True
+    hass.states.async_set(VT_ENTITY_ID, "unavailable")
+    await hass.async_block_till_done()
+    assert _attrs(hass)["waiting_for_vtherm_start"] is False
+    await advance(30)
+    assert core_api.calls == []
+
+    set_vtherm_state(hass, ready=False)  # back, still not restored
+    await hass.async_block_till_done()
+    assert _attrs(hass)["waiting_for_vtherm_start"] is True
+    assert core_api.calls == []
+    entity.inhibition_manager.is_restored = True
+    await advance(5)
+    assert core_api.calls == [SET]
+
+
+async def test_status_change_while_waiting_for_startup(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """A status change while waiting makes only the last wanted call once the VTherm started."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    hass.states.async_set(HEATER, "off")
+    await advance(5)
+    assert core_api.calls == []
+    entity.inhibition_manager.is_restored = True
+    await advance(5)
+    assert core_api.calls == [UNSET]
+    await advance(60)
+    assert core_api.calls == [UNSET]
+
+
+async def test_unload_while_waiting_for_startup(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """Unloading the entry while waiting stops the checks: no call afterwards."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "on")
+    entry = await setup_plugin([HEATER])
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    entity.inhibition_manager.is_restored = True
+    set_vtherm_state(hass, ready=True)
+    await advance(30)
+    assert core_api.calls == []
+
+
+async def test_removal_before_startup_releases_once_started(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """An entry deleted before the VTherm restored its state: the unset is made once it has
+    started (no refused call, no repair issue)."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER])
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert core_api.calls == []
+    await advance(5)
+    assert core_api.calls == []
+    entity.inhibition_manager.is_restored = True
+    await advance(5)
+    assert core_api.calls == [UNSET]
+    assert not [issue for (domain, _), issue in ir.async_get(hass).issues.items() if domain == DOMAIN]
+
+
+async def test_removal_before_startup_released_after_timeout(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """A VTherm that never starts is released anyway after RELEASE_START_TIMEOUT."""
+    from custom_components.vtherm_inhibition.const import RELEASE_START_TIMEOUT
+
+    _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "off")
+    entry = await setup_plugin([HEATER])
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    for _ in range(RELEASE_START_TIMEOUT // 5 - 1):
+        await advance(5)
+    assert core_api.calls == []
+    await advance(5)
+    assert core_api.calls == [UNSET]
