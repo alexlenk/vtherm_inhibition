@@ -436,6 +436,90 @@ async def test_real_facade_errors(hass: HomeAssistant, vtherm, setup_plugin, adv
     hass.data.pop(CLIMATE_DOMAIN)
 
 
+class _Manager:
+    def __init__(self, restored: bool) -> None:
+        self.is_restored = restored
+
+
+class _StartingVTherm:
+    """A VTherm entity as the core has it, before or after its startup restore."""
+
+    entity_id = VT_ENTITY_ID
+
+    def __init__(self, restored: bool) -> None:
+        self.inhibition_manager = _Manager(restored)
+
+    async def async_set_inhibition(self, stop_underlyings: bool) -> None:
+        raise AssertionError("called through the facade")
+
+    async def async_unset_inhibition(self) -> None:
+        raise AssertionError("called through the facade")
+
+
+def _install_vtherm_entity(hass: HomeAssistant, restored: bool) -> _StartingVTherm:
+    from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
+
+    class _Component:
+        entities: list = []
+
+    entity = _StartingVTherm(restored)
+    component = hass.data[CLIMATE_DOMAIN] = _Component()
+    component.entities = [entity]
+    return entity
+
+
+async def test_waits_for_the_vtherm_startup(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """No call before the VTherm restored its state; the call is made at its next state change."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    assert core_api.calls == []
+    attrs = _attrs(hass)
+    assert attrs["waiting_for_vtherm_start"] is True
+    assert attrs["last_error"] is None
+    assert attrs["next_retry_at"] is None
+
+    await advance(60)  # still not started: polled, no call, no retry
+    assert core_api.calls == []
+
+    entity.inhibition_manager.is_restored = True
+    set_vtherm_state(hass, ready=False)  # the startup writes the state, not ready yet
+    await hass.async_block_till_done()
+    assert core_api.calls == [SET]
+    assert _attrs(hass)["waiting_for_vtherm_start"] is False
+
+
+async def test_vtherm_startup_found_by_poll(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """Without a state change, the startup is found by the periodic check."""
+    entity = _install_vtherm_entity(hass, restored=False)
+    hass.states.async_set(HEATER, "on")
+    await setup_plugin([HEATER])
+    entity.inhibition_manager.is_restored = True
+    await advance(5)
+    assert core_api.calls == [SET]
+    assert _attrs(hass)["waiting_for_vtherm_start"] is False
+
+
+async def test_not_started_error_waits_without_retry(hass: HomeAssistant, vtherm, core_api, setup_plugin, advance) -> None:
+    """The core's InhibitionNotStartedError (VTherm restarted between check and call) waits
+    for the startup instead of counting as a failure."""
+
+    class InhibitionNotStartedError(Exception):
+        """Same name as the core's error."""
+
+    core_api.errors = [InhibitionNotStartedError("not started")]
+    hass.states.async_set(HEATER, "off")
+    await setup_plugin([HEATER])
+    assert core_api.names == ["unset"]
+    attrs = _attrs(hass)
+    assert attrs["waiting_for_vtherm_start"] is True
+    assert attrs["last_error"] is None
+    assert attrs["next_retry_at"] is None
+    await advance(5)
+    assert core_api.names == ["unset", "unset"]
+    assert _attrs(hass)["waiting_for_vtherm_start"] is False
+
+
 # ---------------------------------------------------------------------------
 # VTherm targeting
 # ---------------------------------------------------------------------------

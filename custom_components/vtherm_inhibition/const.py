@@ -42,6 +42,8 @@ MAX_DELAY_SECONDS = 86400
 #: later retries run every RETRY_INTERVAL seconds.
 RETRY_DELAYS = (30, 60, 120)
 RETRY_INTERVAL = 300
+#: Seconds between two checks while waiting for the VTherm to restore its state at startup.
+START_POLL_INTERVAL = 5
 
 # Per-source contribution, exposed in the diagnostic attributes.
 SOURCE_ACTIVE = "active"

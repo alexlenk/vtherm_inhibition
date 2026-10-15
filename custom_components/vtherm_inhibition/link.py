@@ -9,12 +9,14 @@ here:
 * the VTherm is targeted by its stable unique ID, resolved to its current
   entity ID through the entity registry at every call (renames are followed;
   a unique ID missing from the registry means the VTherm is not available);
-* a call is only made while the VTherm is *available*: its entity exists (it
-  has a state that is not ``unavailable``). The VTherm does not need to have
-  started: the core merges an early ``set`` with the inhibition state it
-  restores at startup (no second entry stop) and closes its command gate at
-  once (no startup command). The pending call is made as soon as the VTherm
-  becomes available;
+* a call is only made while the VTherm is *available* (its entity exists: it
+  has a state that is not ``unavailable``) and has *started*: it restored its
+  inhibition state at startup (``inhibition_manager.is_restored``; the core
+  refuses calls before with ``InhibitionNotStartedError``). It does not wait
+  for the VTherm to be ready (every underlying reporting a state): the core
+  defers the entry stop and the exit reconciliation until then. While waiting,
+  the VTherm is checked at each of its state changes and every
+  ``START_POLL_INTERVAL`` seconds;
 * each time the VTherm becomes available (Home Assistant start, VTherm
   reload) the current call is made again: ``set`` is idempotent in the core and
   ``unset`` is a no-op outside an inhibition;
@@ -59,7 +61,7 @@ from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
 from vtherm_api.const import VTHERM_API_NAME
 from vtherm_api.log_collector import get_vtherm_logger
 
-from .const import DOMAIN, RETRY_DELAYS, RETRY_INTERVAL, VT_DOMAIN
+from .const import DOMAIN, RETRY_DELAYS, RETRY_INTERVAL, START_POLL_INTERVAL, VT_DOMAIN
 from .detector import InhibitionDetector
 from .models import ApiCall, call_for
 
@@ -75,6 +77,8 @@ ISSUE_RELEASE_FAILED = "release_failed"
 #: Message of the facade's TypeError for an entity without inhibition support.
 _FACADE_UNSUPPORTED = "does not support inhibition"
 _INHIBITION_METHODS = ("async_set_inhibition", "async_unset_inhibition")
+#: Name of the core's error for a call made before the VTherm restored its state.
+_NOT_STARTED_ERROR = "InhibitionNotStartedError"
 
 
 class CoreWithoutInhibitionError(Exception):
@@ -107,14 +111,30 @@ def vtherm_available(state: State | None) -> bool:
     return state is not None and state.state != STATE_UNAVAILABLE
 
 
-def _check_inhibition_support(hass: HomeAssistant, entity_id: str) -> None:
-    """Raise CoreWithoutInhibitionError when the climate entity lacks the inhibition methods."""
+def _find_vtherm_entity(hass: HomeAssistant, entity_id: str) -> Any:
     component = hass.data.get(CLIMATE_DOMAIN)
     for entity in getattr(component, "entities", ()):
         if getattr(entity, "entity_id", None) == entity_id:
-            if not all(callable(getattr(entity, method, None)) for method in _INHIBITION_METHODS):
-                raise CoreWithoutInhibitionError(f"VTherm entity '{entity_id}' does not support inhibition")
-            return
+            return entity
+    return None
+
+
+def vtherm_started(hass: HomeAssistant, entity_id: str) -> bool:
+    """True once the VTherm restored its inhibition state at startup. An entity that is
+    not found is reported started: the call then fails like the facade does."""
+    manager = getattr(_find_vtherm_entity(hass, entity_id), "inhibition_manager", None)
+    return getattr(manager, "is_restored", True) is not False
+
+
+def _is_not_started_error(err: BaseException) -> bool:
+    return type(err).__name__ == _NOT_STARTED_ERROR
+
+
+def _check_inhibition_support(hass: HomeAssistant, entity_id: str) -> None:
+    """Raise CoreWithoutInhibitionError when the climate entity lacks the inhibition methods."""
+    entity = _find_vtherm_entity(hass, entity_id)
+    if entity is not None and not all(callable(getattr(entity, method, None)) for method in _INHIBITION_METHODS):
+        raise CoreWithoutInhibitionError(f"VTherm entity '{entity_id}' does not support inhibition")
 
 
 async def async_call_api(hass: HomeAssistant, call: ApiCall, entity_id: str, stop_underlyings: bool) -> None:
@@ -182,6 +202,10 @@ class VThermLink:
         self._retry_count = 0
         self._next_retry_at: datetime | None = None
         self._retry_job = HassJob(self._async_retry_fired, f"{name} inhibition retry", cancel_on_shutdown=True)
+        #: True while the call waits for the VTherm to restore its state at startup.
+        self._waiting_start = False
+        self._start_poll_cancel: CALLBACK_TYPE | None = None
+        self._start_poll_job = HassJob(self._async_start_poll_fired, f"{name} VTherm start check", cancel_on_shutdown=True)
         self._last_call: ApiCall | None = None
         self._last_call_at: datetime | None = None
         self._last_error: str | None = None
@@ -232,6 +256,7 @@ class VThermLink:
         """Stop following; never calls ``unset`` (a call in progress completes)."""
         self._started = False
         self._cancel_retry()
+        self._stop_waiting_start()
         self._clear_unset_issue()
         for unsub in (*self._unsubs, *self._unsub_vtherm):
             unsub()
@@ -291,6 +316,8 @@ class VThermLink:
         if vtherm_available(state) and self._available:
             self._check_core_state(state)
         self._update_availability(state)
+        if self._waiting_start and self._available:
+            self._kick()
 
     @callback
     def _check_core_state(self, state: State) -> None:
@@ -345,6 +372,7 @@ class VThermLink:
         else:
             _LOGGER.info("%s - VTherm %s not available", self, self._entity_id)
             self._cancel_retry()
+            self._stop_waiting_start()
         self._publish()
 
     # ------------------------------------------------------------------
@@ -383,6 +411,10 @@ class VThermLink:
             entity_id = self._entity_id
             generation = self._generation
             stop_underlyings = self._detector.config.stop_underlyings
+            if not vtherm_started(self._hass, entity_id):
+                self._wait_for_start()
+                break
+            self._stop_waiting_start()
             self._last_call = call
             self._last_call_at = dt_util.utcnow()
             self._publish()
@@ -393,6 +425,10 @@ class VThermLink:
                 # The real state of the VTherm is not known any more: the next
                 # wanted call is always made, even if it equals the last applied one.
                 self._applied = None
+                if _is_not_started_error(err):
+                    # Restarted between the check and the call: wait for its startup again.
+                    self._wait_for_start()
+                    break
                 self._last_error = _format_error(err)
                 self._async_handle_error(call, err)
                 if self._wanted == call and generation == self._generation:
@@ -409,6 +445,28 @@ class VThermLink:
                 self._clear_unset_issue()
             self._publish()
         self._publish()
+
+    @callback
+    def _wait_for_start(self) -> None:
+        """Check again at the next VTherm state change, or after START_POLL_INTERVAL."""
+        if not self._waiting_start:
+            _LOGGER.info("%s - waiting for %s to start before %s_inhibition", self, self._entity_id, self._wanted)
+        self._waiting_start = True
+        if self._start_poll_cancel is None:
+            self._start_poll_cancel = async_call_later(self._hass, START_POLL_INTERVAL, self._start_poll_job)
+
+    @callback
+    def _stop_waiting_start(self) -> None:
+        self._waiting_start = False
+        if self._start_poll_cancel is not None:
+            self._start_poll_cancel()
+        self._start_poll_cancel = None
+
+    @callback
+    def _async_start_poll_fired(self, _now: datetime) -> None:
+        self._start_poll_cancel = None
+        if self._waiting_start:
+            self._kick()
 
     @callback
     def _async_handle_error(self, call: ApiCall, err: Exception) -> None:
@@ -502,6 +560,7 @@ class VThermLink:
             "last_api_call_at": self._last_call_at.isoformat() if self._last_call_at else None,
             "last_error": self._last_error,
             "retry_pending": self.call_pending,
+            "waiting_for_vtherm_start": self._waiting_start,
             "next_retry_at": self._next_retry_at.isoformat() if self._next_retry_at else None,
         }
 

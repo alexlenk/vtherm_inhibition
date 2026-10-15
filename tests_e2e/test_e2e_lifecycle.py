@@ -162,9 +162,9 @@ async def test_startup(
     plugin_first: bool,
     source_state: str,
 ) -> None:
-    """Plugin configured, then HA restarts (both setup orders): the plugin calls the VTherm as
-    soon as its entity exists, before its startup. The VTherm was not inhibited before the
-    restart: an active source means no heat command at all and exactly one stop."""
+    """Plugin configured, then HA restarts (both setup orders): the plugin waits until the
+    VTherm restored its state, then calls it. The VTherm was not inhibited before the restart,
+    so it starts normally (one heat command) until the set: then exactly one stop."""
     vt_entry = climate_vt_entry()
     await setup_entry(hass, vt_entry)
     underlyings.install()
@@ -183,8 +183,7 @@ async def test_startup(
         assert names(facade_calls) == ["unset"]
     else:
         assert_inhibited(sc)
-        assert underlyings.hvac_modes() == ["off"]
-        assert underlyings.temperatures() == []
+        assert underlyings.hvac_modes() == ["heat", "off"]
         assert names(facade_calls) == ["set"]
 
 
@@ -192,8 +191,8 @@ async def test_startup(
 async def test_restart_while_inhibited(
     hass: HomeAssistant, setup_bathroom, underlyings: Underlyings, facade_calls: FacadeCalls, advance, plugin_first: bool
 ) -> None:
-    """Restart during an inhibition: the plugin's early set is merged with the restored
-    inhibition: zero stops, no resume; then a confirmed INACTIVE resumes."""
+    """Restart during an inhibition: the restored snapshot keeps the VTherm inhibited and the
+    plugin's set after the startup is idempotent: zero stops, no resume; then a confirmed INACTIVE resumes."""
     sc = await setup_bathroom(activation=10, deactivation=30)
     await _inhibit(hass, sc, advance)
     assert sc.attrs["entry_stop_completed"] is True
