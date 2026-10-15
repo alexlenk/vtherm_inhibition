@@ -449,6 +449,11 @@ class _StartingVTherm:
     def __init__(self, restored: bool) -> None:
         self.inhibition_manager = _Manager(restored)
 
+    @property
+    def is_inhibition_started(self) -> bool:
+        """As the core: True once the inhibition state is restored at startup."""
+        return self.inhibition_manager.is_restored
+
     async def async_set_inhibition(self, stop_underlyings: bool) -> None:
         raise AssertionError("called through the facade")
 
@@ -504,8 +509,7 @@ async def test_not_started_error_waits_without_retry(hass: HomeAssistant, vtherm
     """The core's InhibitionNotStartedError (VTherm restarted between check and call) waits
     for the startup instead of counting as a failure."""
 
-    class InhibitionNotStartedError(Exception):
-        """Same name as the core's error."""
+    from vtherm_api import InhibitionNotStartedError
 
     core_api.errors = [InhibitionNotStartedError("not started")]
     hass.states.async_set(HEATER, "off")

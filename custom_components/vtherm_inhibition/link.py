@@ -11,7 +11,7 @@ here:
   a unique ID missing from the registry means the VTherm is not available);
 * a call is only made while the VTherm is *available* (its entity exists: it
   has a state that is not ``unavailable``) and has *started*: it restored its
-  inhibition state at startup (``inhibition_manager.is_restored``; the core
+  inhibition state at startup (``VThermAPI.is_inhibition_started``; the core
   refuses calls before with ``InhibitionNotStartedError``). It does not wait
   for the VTherm to be ready (every underlying reporting a state): the core
   defers the entry stop and the exit reconciliation until then. While waiting,
@@ -56,7 +56,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 from homeassistant.util import dt as dt_util
-from vtherm_api import VThermAPI
+from vtherm_api import InhibitionNotStartedError, VThermAPI
 from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
 from vtherm_api.const import VTHERM_API_NAME
 from vtherm_api.log_collector import get_vtherm_logger
@@ -77,8 +77,6 @@ ISSUE_RELEASE_FAILED = "release_failed"
 #: Message of the facade's TypeError for an entity without inhibition support.
 _FACADE_UNSUPPORTED = "does not support inhibition"
 _INHIBITION_METHODS = ("async_set_inhibition", "async_unset_inhibition")
-#: Name of the core's error for a call made before the VTherm restored its state.
-_NOT_STARTED_ERROR = "InhibitionNotStartedError"
 
 
 class CoreWithoutInhibitionError(Exception):
@@ -120,15 +118,21 @@ def _find_vtherm_entity(hass: HomeAssistant, entity_id: str) -> Any:
 
 
 def vtherm_started(hass: HomeAssistant, entity_id: str) -> bool:
-    """True once the VTherm restored its inhibition state at startup. An entity that is
-    not found is reported started (the call then fails like the facade does), and so is a
-    core without ``inhibition_manager.is_restored`` (it accepts calls at any time)."""
-    manager = getattr(_find_vtherm_entity(hass, entity_id), "inhibition_manager", None)
-    return getattr(manager, "is_restored", True) is not False
+    """True once the VTherm accepts the API calls (``VThermAPI.is_inhibition_started``:
+    it restored its inhibition state at startup). Without the core's API, or for a target
+    the facade cannot resolve, it is reported started: the call then fails like the
+    facade does and is retried."""
+    api = get_core_api(hass)
+    if api is None:
+        return True
+    try:
+        return api.is_inhibition_started(entity_id)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        return True
 
 
 def _is_not_started_error(err: BaseException) -> bool:
-    return type(err).__name__ == _NOT_STARTED_ERROR
+    return isinstance(err, InhibitionNotStartedError)
 
 
 def _check_inhibition_support(hass: HomeAssistant, entity_id: str) -> None:
@@ -429,7 +433,7 @@ class VThermLink:
                 if _is_not_started_error(err):
                     # Defensive: the check above and the core's own check see the same entity
                     # with nothing awaited in between, so this only happens with a core that
-                    # raises it without exposing is_restored. Wait for the startup.
+                    # raises it without exposing is_inhibition_started. Wait for the startup.
                     self._wait_for_start()
                     break
                 self._last_error = _format_error(err)
