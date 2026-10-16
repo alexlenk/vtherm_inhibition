@@ -95,7 +95,7 @@
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat sans prise en charge de l'inhibition",
-      "description": "VTherm Inhibition nécessite la première version de Versatile Thermostat incluant l'inhibition (#2087) et vtherm_api 0.6.1 ou supérieur. Le Versatile Thermostat installé a refusé la demande d'inhibition. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
+      "description": "VTherm Inhibition nécessite Versatile Thermostat 10.6.1.beta1 ou ultérieur (la première version avec l'inhibition, #2087) et vtherm_api 0.6.2 ou supérieur. Le Versatile Thermostat installé a refusé la demande d'inhibition. Mettez à jour Versatile Thermostat puis redémarrez Home Assistant."
     },
     "missing_sources": {
       "title": "Sources d'inhibition manquantes",

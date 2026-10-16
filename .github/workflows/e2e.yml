@@ -2,13 +2,9 @@ name: End-to-end tests
 
 # Runs tests_e2e/ against a checkout of the Versatile Thermostat core.
 #
-# By default the core is jmcollin78/versatile_thermostat at main. Until the
-# inhibition core (issue #2087, PR #2101) is merged and released, run this
-# workflow manually ("Run workflow") with core_repository
-# alexlenk/versatile_thermostat and core_ref feat/2087-inhibition-core.
-# The job is continue-on-error until a Versatile Thermostat release with
-# inhibition exists: a core without inhibition makes these tests fail, which
-# must not block the plugin's CI.
+# By default the core is jmcollin78/versatile_thermostat at main, which has
+# inhibition since #2101 (first release 10.6.1.beta1). "Run workflow" accepts
+# another core_repository / core_ref, e.g. a release tag.
 
 on:
   push:
@@ -32,8 +28,6 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    # Remove once the first Versatile Thermostat release with inhibition (#2087) exists.
-    continue-on-error: true
     env:
       CORE_REPOSITORY: ${{ inputs.core_repository || 'jmcollin78/versatile_thermostat' }}
       CORE_REF: ${{ inputs.core_ref || 'main' }}
@@ -57,9 +51,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # vtherm_api 0.6.2 is not on PyPI yet: fall back to its branch (remove once published)
           pip3 install -r core/requirements_test.txt
-          pip3 install -r requirements_test.txt || (pip3 install "git+https://github.com/alexlenk/vtherm_api@feat/2087-inhibition-started" && pip3 install -r requirements_test.txt)
+          pip3 install -r requirements_test.txt
 
       - name: Run the end-to-end tests
         env:
