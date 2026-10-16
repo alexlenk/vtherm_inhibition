@@ -6,9 +6,10 @@ import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.vtherm_inhibition.config_flow import _validate_sources, forbidden_sources
+from custom_components.vtherm_inhibition.config_flow import _validate_sources, entry_title, forbidden_sources
 from custom_components.vtherm_inhibition.const import (
     CONF_ACTIVATION_DELAY,
     CONF_CLIMATE_HVAC_MODES,
@@ -67,6 +68,19 @@ async def test_full_flow(hass: HomeAssistant, vtherm, core_api) -> None:
     assert entry.version == 2
     # The sources do not exist: UNKNOWN keeps the VTherm inhibited, without entry stop.
     assert core_api.calls == [("set", VT_ENTITY_ID, False)]
+
+
+async def test_entry_title_prefixes_the_area(hass: HomeAssistant, vtherm) -> None:
+    """A VTherm named after its function only gets its area in front."""
+    assert entry_title(hass, VT_ENTITY_ID) == "bathroom"  # no area: the name alone
+    area = ar.async_get(hass).async_create("Bad")
+    er.async_get(hass).async_update_entity(VT_ENTITY_ID, area_id=area.id, name="Heizung")
+    state = hass.states.get(VT_ENTITY_ID)
+    hass.states.async_set(VT_ENTITY_ID, state.state, {**state.attributes, "friendly_name": "Heizung"})
+    assert entry_title(hass, VT_ENTITY_ID) == "Bad Heizung"
+    hass.states.async_set(VT_ENTITY_ID, state.state, {**state.attributes, "friendly_name": "Bad Heizung"})
+    assert entry_title(hass, VT_ENTITY_ID) == "Bad Heizung"  # the area is already in the name
+    assert entry_title(hass, "climate.missing") == "climate.missing"
 
 
 async def test_defaults_in_settings_form(hass: HomeAssistant, vtherm) -> None:

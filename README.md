@@ -114,7 +114,7 @@ Add one integration entry **per VTherm**: first select the Versatile Thermostat,
 
 | Option (key) | Type | Default | Description |
 | --- | --- | --- | --- |
-| Versatile Thermostat (`target_entity`) | climate entity of `versatile_thermostat` | required | The VTherm to inhibit. Stored by its stable unique ID (`vtherm_unique_id`) and entity ID (`vtherm_entity_id`, kept up to date). One entry per VTherm. |
+| Versatile Thermostat (`target_entity`) | climate entity of `versatile_thermostat` | required | The VTherm to inhibit. Stored by its stable unique ID (`vtherm_unique_id`) and entity ID (`vtherm_entity_id`, kept up to date). One entry per VTherm, named after it with its area in front (e.g. "Bathroom Heating") unless the name already contains the area. |
 | Sources (`source_entities`) | list of `binary_sensor` / `input_boolean` / `switch` / `climate` | required, at least one | OR-combined sources. The VTherm itself is refused. |
 | Inhibiting HVAC modes (`climate_hvac_modes`) | list among `heat`, `cool`, `heat_cool`, `auto`, `dry`, `fan_only` | `heat`, `cool`, `heat_cool`, `auto`, `dry` | Used for `climate` sources only. |
 | Activation delay (`activation_delay`) | seconds, 0–86400 | `30` | Debounce before `active` is confirmed. |

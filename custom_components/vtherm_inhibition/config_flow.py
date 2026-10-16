@@ -8,6 +8,8 @@ import voluptuous as vol
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
@@ -29,6 +31,27 @@ from .const import (
 )
 from .link import resolve_vtherm_entity_id
 from .models import OPTION_KEYS, default_options
+
+
+def entry_title(hass: HomeAssistant, vtherm_entity_id: str) -> str:
+    """Name the entry after the VTherm, prefixed with its area.
+
+    VTherms are often named after their function only ("Heating") and get the
+    room from their area, so the bare name would make every entry look alike.
+    The area (of the entity, else of its device) is put in front unless the
+    name already contains it.
+    """
+    state = hass.states.get(vtherm_entity_id)
+    name = state.name if state else vtherm_entity_id
+    entity = er.async_get(hass).async_get(vtherm_entity_id)
+    area_id = entity.area_id if entity else None
+    if area_id is None and entity is not None and entity.device_id:
+        device = dr.async_get(hass).async_get(entity.device_id)
+        area_id = device.area_id if device else None
+    area = ar.async_get(hass).async_get_area(area_id) if area_id else None
+    if area is None or area.name.casefold() in name.casefold():
+        return name
+    return f"{area.name} {name}"
 
 
 def _seconds_selector() -> selector.NumberSelector:
@@ -195,8 +218,7 @@ class InhibitionConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_VTHERM_UNIQUE_ID: self._vtherm_unique_id,
                     **_clean_settings(user_input),
                 }
-                state = self.hass.states.get(self._vtherm_entity_id)
-                return self.async_create_entry(title=state.name if state else self._vtherm_entity_id, data=data)
+                return self.async_create_entry(title=entry_title(self.hass, self._vtherm_entity_id), data=data)
             defaults.update(user_input)
 
         return self.async_show_form(

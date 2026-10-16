@@ -114,7 +114,7 @@ Ajoutez une entrée d'intégration **par VTherm** : choisissez d'abord le Versat
 
 | Option (clé) | Type | Défaut | Description |
 | --- | --- | --- | --- |
-| Versatile Thermostat (`target_entity`) | entité climate de `versatile_thermostat` | obligatoire | Le VTherm à inhiber, mémorisé par son identifiant unique stable (`vtherm_unique_id`) et son entity ID (`vtherm_entity_id`, tenu à jour). Une entrée par VTherm. |
+| Versatile Thermostat (`target_entity`) | entité climate de `versatile_thermostat` | obligatoire | Le VTherm à inhiber, mémorisé par son identifiant unique stable (`vtherm_unique_id`) et son entity ID (`vtherm_entity_id`, tenu à jour). Une entrée par VTherm, nommée d'après lui avec sa pièce devant (par ex. « Salle de bain Chauffage ») sauf si le nom contient déjà la pièce. |
 | Sources (`source_entities`) | liste de `binary_sensor` / `input_boolean` / `switch` / `climate` | obligatoire, au moins une | Sources combinées par OU. Le VTherm lui-même est refusé. |
 | Modes HVAC inhibants (`climate_hvac_modes`) | liste parmi `heat`, `cool`, `heat_cool`, `auto`, `dry`, `fan_only` | `heat`, `cool`, `heat_cool`, `auto`, `dry` | Uniquement pour les sources `climate`. |
 | Délai d'activation (`activation_delay`) | secondes, 0–86400 | `30` | Anti-rebond avant confirmation de `active`. |
