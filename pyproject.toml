@@ -1,6 +1,6 @@
 [project]
 name = "vtherm-inhibition"
-version = "0.2.0"
+version = "1.0.0"
 description = "Inhibition plugin for Versatile Thermostat (issue #2087): drives set_inhibition / unset_inhibition"
 requires-python = ">=3.13"
 

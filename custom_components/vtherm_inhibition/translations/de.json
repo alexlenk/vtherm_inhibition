@@ -95,7 +95,7 @@
   "issues": {
     "core_without_inhibition": {
       "title": "Versatile Thermostat ohne Sperr-Unterstützung",
-      "description": "VTherm-Sperre benötigt Versatile Thermostat 10.6.1.beta1 oder neuer (die erste Version mit Inhibition, #2087) und vtherm_api 0.6.2 oder neuer. Das installierte Versatile Thermostat hat die Sperranfrage abgelehnt. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
+      "description": "VTherm-Sperre benötigt Versatile Thermostat 10.6.1 oder neuer (die erste stabile Version mit Inhibition, #2087) und vtherm_api 0.6.2 oder neuer. Das installierte Versatile Thermostat hat die Sperranfrage abgelehnt. Aktualisiere Versatile Thermostat und starte Home Assistant neu."
     },
     "missing_sources": {
       "title": "Fehlende Sperrquellen",

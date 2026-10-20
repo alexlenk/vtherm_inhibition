@@ -16,6 +16,6 @@
         "vtherm_api>=0.6.2"
     ],
     "ssdp": [],
-    "version": "0.2.0",
+    "version": "1.0.0",
     "zeroconf": []
 }

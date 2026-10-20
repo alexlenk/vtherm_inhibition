@@ -84,7 +84,7 @@ The option is passed to `set_inhibition` when an inhibition starts. Changing it 
 ## Prerequisites
 
 - Home Assistant 2026.7.1 or later.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat): **10.6.1.beta1 or later**, the first release that includes inhibition (#2087, [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)). Older releases do not support inhibition.
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat): **10.6.1 or later**, the first stable release that includes inhibition (#2087, [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)). Older releases do not support inhibition.
 - `vtherm_api` **≥ 0.6.2** (released on PyPI, installed automatically).
 
 With an older Versatile Thermostat the entries load, but the core refuses the calls: a repair issue explains the minimum versions and the VTherms are left untouched.

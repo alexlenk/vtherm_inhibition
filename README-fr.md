@@ -84,7 +84,7 @@ L'option est transmise à `set_inhibition` au début d'une inhibition. La modifi
 ## Prérequis
 
 - Home Assistant 2026.7.1 ou supérieur.
-- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) : **10.6.1.beta1 ou ultérieure**, la première version incluant l'inhibition (#2087, [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)). Les versions antérieures ne prennent pas en charge l'inhibition.
+- [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) : **10.6.1 ou ultérieure**, la première version stable incluant l'inhibition (#2087, [#2101](https://github.com/jmcollin78/versatile_thermostat/pull/2101)). Les versions antérieures ne prennent pas en charge l'inhibition.
 - `vtherm_api` **≥ 0.6.2** (publié sur PyPI, installé automatiquement).
 
 Avec un Versatile Thermostat plus ancien, les entrées se chargent mais le cœur refuse les appels : une réparation indique les versions minimales et les VTherm ne sont pas touchés.
