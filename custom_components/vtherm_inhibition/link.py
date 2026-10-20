@@ -26,6 +26,9 @@ here:
   status change cancels the retry and makes the new call. An ``unset`` still
   failing after the 3rd retry raises a repair issue, removed on success or
   status change;
+* each change of the call is written to the VTherm event log
+  (``write_event_log``, under the VTherm's name) with its reason: active or
+  unavailable sources, bypass, no active source;
 * repeated statuses asking for the same call (``ACTIVE`` <-> ``UNKNOWN``) make
   no new call: ``stop_underlyings`` is only read when an inhibition starts;
 * the inhibition state the core publishes (``specific_states.inhibition``) is
@@ -59,7 +62,7 @@ from homeassistant.util import dt as dt_util
 from vtherm_api import InhibitionNotStartedError, VThermAPI
 from vtherm_api.const import DOMAIN as VTHERM_API_DOMAIN
 from vtherm_api.const import VTHERM_API_NAME
-from vtherm_api.log_collector import get_vtherm_logger
+from vtherm_api.log_collector import get_vtherm_logger, write_event_log
 
 from .const import DOMAIN, RELEASE_START_TIMEOUT, RETRY_DELAYS, RETRY_INTERVAL, START_POLL_INTERVAL, VT_DOMAIN
 from .detector import InhibitionDetector
@@ -390,11 +393,19 @@ class VThermLink:
             return
         _LOGGER.debug("%s - status %s asks for %s", self, self._detector.status, wanted)
         self._wanted = wanted
+        self._write_event_log(wanted)
         self._retry_count = 0
         self._cancel_retry()
         self._clear_unset_issue()
         self._kick()
         self._publish()
+
+    @callback
+    def _write_event_log(self, call: ApiCall) -> None:
+        """Log the change under the VTherm's name, so it shows in that VTherm's logs."""
+        vtherm = _find_vtherm_entity(self._hass, self._entity_id) or self._entity_id or self._name
+        action = "Inhibition requested" if call is ApiCall.SET else "Inhibition released"
+        write_event_log(_LOGGER, vtherm, f"{action} by {self} ({self._detector.status_reason})")
 
     @callback
     def _kick(self) -> None:

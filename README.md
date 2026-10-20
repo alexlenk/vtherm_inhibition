@@ -176,6 +176,29 @@ Versatile Thermostat publishes its own side under the `specific_states.inhibitio
 
 Versatile Thermostat keeps an inhibition across restarts until a plugin releases it. If the plugin's code is removed (uninstalled) while one of its entries still inhibits a VTherm, that VTherm stays inhibited. To release it: reinstall the plugin, restart Home Assistant, then delete the plugin's entry for that VTherm; the deletion calls `unset_inhibition`. If the entry was already deleted while Versatile Thermostat was not running (repair issue *VTherm possibly still inhibited*), add an entry for that VTherm again: it releases the VTherm as soon as its sources are inactive (or turn its bypass on), then delete it. Deleting the entries **before** uninstalling the plugin avoids this.
 
+## Troubleshooting
+
+### Why did my VTherm turn off?
+
+Each time the plugin asks Versatile Thermostat to step back or to resume, it writes an event to the VTherm's log (the logs Versatile Thermostat shows per VTherm), with the reason:
+
+```
+Office - ---------------------> NEW EVENT: Inhibition requested by VThermInhibition-Office (active source: binary_sensor.stove_on) ---...
+Office - ---------------------> NEW EVENT: Inhibition released by VThermInhibition-Office (no active source) ---...
+```
+
+The reason is the source(s) that are active, the source(s) that are unavailable (an `unknown` status, after the grace period), the bypass switch being on, or no active source. On the VTherm itself, an inhibition shows as the `hvac_off_inhibition` message and in the `specific_states.inhibition` attribute (see above).
+
+### "RepairIncorrectStateManager: underlying ... was repaired" while the VTherm is inhibited
+
+If you operate an underlying device by hand while its VTherm is inhibited (for example you turn a heater switch on), Versatile Thermostat sees that the device is not in the state it expects and logs a warning such as:
+
+```
+WARNING [feature_repair_incorrect_state_manager] Thermostat Office - RepairIncorrectStateManager: underlying switch.office_heater was repaired. Consecutive repairs so far: 1
+```
+
+This is expected and harmless: the repair command is blocked by the inhibition, so **the device is left as you set it**. When this repeats for 5 consecutive cycles, Versatile Thermostat also logs an error that repairs are paused (`maximum consecutive repair attempts (5) reached`) and tries again later; this is also harmless during an inhibition. When the inhibition ends, the VTherm takes control of its devices again.
+
 ## Limitations
 
 - One inhibition entry per VTherm; combine several sources in one entry instead.

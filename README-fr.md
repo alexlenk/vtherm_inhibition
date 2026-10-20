@@ -176,6 +176,29 @@ Versatile Thermostat publie de son côté l'attribut `specific_states.inhibition
 
 Versatile Thermostat conserve une inhibition à travers les redémarrages jusqu'à ce qu'un plugin la lève. Si le code du plugin est supprimé (désinstallé) alors qu'une de ses entrées inhibe encore un VTherm, ce VTherm reste inhibé. Pour le libérer : réinstallez le plugin, redémarrez Home Assistant, puis supprimez l'entrée du plugin pour ce VTherm ; la suppression appelle `unset_inhibition`. Si l'entrée a déjà été supprimée pendant que Versatile Thermostat ne tournait pas (réparation *VTherm peut-être encore inhibé*), ajoutez de nouveau une entrée pour ce VTherm : elle le libère dès que ses sources sont inactives (ou allumez son contournement), puis supprimez-la. Supprimer les entrées **avant** de désinstaller le plugin évite cette situation.
 
+## Dépannage
+
+### Pourquoi mon VTherm s'est-il éteint ?
+
+À chaque fois que le plugin demande à Versatile Thermostat de se retirer ou de reprendre, il écrit un événement dans le journal du VTherm (les journaux que Versatile Thermostat affiche pour chaque VTherm), avec la raison :
+
+```
+Bureau - ---------------------> NEW EVENT: Inhibition requested by VThermInhibition-Bureau (active source: binary_sensor.poele_allume) ---...
+Bureau - ---------------------> NEW EVENT: Inhibition released by VThermInhibition-Bureau (no active source) ---...
+```
+
+La raison est la ou les sources actives, la ou les sources indisponibles (état `unknown`, après le délai de grâce), l'interrupteur de contournement allumé, ou l'absence de source active. Sur le VTherm lui-même, une inhibition apparaît comme le message `hvac_off_inhibition` et dans l'attribut `specific_states.inhibition` (voir plus haut).
+
+### « RepairIncorrectStateManager: underlying ... was repaired » pendant que le VTherm est inhibé
+
+Si vous manœuvrez à la main un sous-jacent pendant que son VTherm est inhibé (par exemple vous allumez l'interrupteur d'un radiateur), Versatile Thermostat constate que l'équipement n'est pas dans l'état attendu et écrit un avertissement comme :
+
+```
+WARNING [feature_repair_incorrect_state_manager] Thermostat Bureau - RepairIncorrectStateManager: underlying switch.radiateur_bureau was repaired. Consecutive repairs so far: 1
+```
+
+C'est normal et sans conséquence : la commande de réparation est bloquée par l'inhibition, **l'équipement reste comme vous l'avez réglé**. Si cela se répète sur 5 cycles consécutifs, Versatile Thermostat écrit aussi une erreur indiquant que les réparations sont suspendues (`maximum consecutive repair attempts (5) reached`) puis réessaie plus tard ; c'est également sans conséquence pendant une inhibition. À la fin de l'inhibition, le VTherm reprend le contrôle de ses équipements.
+
 ## Limites
 
 - Une seule entrée d'inhibition par VTherm ; regroupez plutôt plusieurs sources dans une entrée.
