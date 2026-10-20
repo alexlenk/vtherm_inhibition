@@ -213,6 +213,10 @@ pytest -q tests
 
 The unit tests use a fake core API that records the `set_inhibition` / `unset_inhibition` calls.
 
+### Releasing
+
+Change `version` in `custom_components/vtherm_inhibition/manifest.json` (and `pyproject.toml`) on `main`: the Release workflow then tags that version and publishes the release with its zip, unless the version is already tagged. Pushing a tag `X.Y.Z`, or *Run workflow* with a version, also releases.
+
 ### End-to-end tests
 
 `tests_e2e/` runs this plugin together with the **real** Versatile Thermostat core (inhibition support, issue #2087) in the Home Assistant test harness: real VTherms (over_climate, over_switch TPI) with mock underlying devices, real plugin entries, timers, reloads and simulated restarts; the service calls reaching the devices are counted. The core is taken from a local checkout (its repository or its `custom_components` directory); its test requirements (`requirements_dev.txt` of the core) must be installed in the same environment:

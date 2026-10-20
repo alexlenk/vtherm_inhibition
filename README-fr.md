@@ -213,6 +213,10 @@ pytest -q tests
 
 Les tests unitaires utilisent une fausse API du cœur qui enregistre les appels `set_inhibition` / `unset_inhibition`.
 
+### Publier une version
+
+Modifiez `version` dans `custom_components/vtherm_inhibition/manifest.json` (et `pyproject.toml`) sur `main` : le workflow Release crée alors l'étiquette de cette version et publie la release avec son zip, sauf si la version est déjà étiquetée. Pousser une étiquette `X.Y.Z`, ou *Run workflow* avec une version, publie aussi.
+
 ### Tests de bout en bout
 
 `tests_e2e/` exécute ce plugin avec le **vrai** cœur Versatile Thermostat (support de l'inhibition, issue #2087) dans le banc de test de Home Assistant : vrais VTherms (over_climate, over_switch TPI) avec des équipements sous-jacents simulés, vraies entrées du plugin, minuteries, rechargements et redémarrages simulés ; les appels de service reçus par les équipements sont comptés. Le cœur provient d'un dépôt local (le dépôt ou son dossier `custom_components`) ; ses dépendances de test (`requirements_dev.txt` du cœur) doivent être installées dans le même environnement :
