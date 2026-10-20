@@ -148,6 +148,53 @@ async def test_status_change_during_a_call(hass: HomeAssistant, vtherm, core_api
     assert entry.runtime_data.link.call_pending is False
 
 
+def _events(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "NEW EVENT" in r.getMessage()]
+
+
+async def test_event_log_on_each_call_change(hass: HomeAssistant, vtherm, core_api, setup_plugin, caplog) -> None:
+    """Each change of the call is written to the VTherm event log with its reason; the startup is not."""
+    hass.states.async_set(HEATER, "off")
+    await setup_plugin([HEATER])
+    assert _events(caplog) == []
+
+    hass.states.async_set(HEATER, "on")
+    await hass.async_block_till_done()
+    await hass.services.async_call("switch", "turn_on", {"entity_id": BYPASS}, blocking=True)
+    await hass.services.async_call("switch", "turn_off", {"entity_id": BYPASS}, blocking=True)
+    await hass.async_block_till_done()
+    hass.states.async_set(HEATER, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(HEATER, "unavailable")
+    await hass.async_block_till_done()
+    hass.states.async_set(HEATER, "on")  # UNKNOWN -> ACTIVE: same call, nothing logged
+    await hass.async_block_till_done()
+
+    events = _events(caplog)
+    assert len(events) == 5
+    assert events[0].startswith(f"{VT_ENTITY_ID} - ")
+    assert "Inhibition requested by VThermInhibition-Bathroom (active source: input_boolean.heater)" in events[0]
+    assert "Inhibition released by VThermInhibition-Bathroom (the bypass switch is on)" in events[1]
+    assert "Inhibition requested by VThermInhibition-Bathroom (active source: input_boolean.heater)" in events[2]
+    assert "Inhibition released by VThermInhibition-Bathroom (no active source)" in events[3]
+    assert "Inhibition requested by VThermInhibition-Bathroom (unavailable source: input_boolean.heater)" in events[4]
+
+
+async def test_event_log_uses_the_vtherm_name(hass: HomeAssistant, vtherm, core_api, setup_plugin, caplog, monkeypatch) -> None:
+    """The event is written under the VTherm entity (its name), so it shows in that VTherm's logs."""
+
+    class _VTherm:
+        def __str__(self) -> str:
+            return "Bathroom VTherm"
+
+    monkeypatch.setattr("custom_components.vtherm_inhibition.link._find_vtherm_entity", lambda _h, _e: _VTherm())
+    hass.states.async_set(HEATER, "off")
+    await setup_plugin([HEATER])
+    hass.states.async_set(HEATER, "on")
+    await hass.async_block_till_done()
+    assert _events(caplog)[0].startswith("Bathroom VTherm - ---------------------> NEW EVENT: Inhibition requested")
+
+
 # ---------------------------------------------------------------------------
 # Restart, reload, unload, removal
 # ---------------------------------------------------------------------------

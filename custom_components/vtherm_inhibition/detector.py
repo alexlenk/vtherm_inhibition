@@ -175,6 +175,18 @@ class InhibitionDetector:
         """Return the sources currently contributing ``active``."""
         return [source.entity_id for source in self.source_states if source.contribution == SOURCE_ACTIVE]
 
+    @property
+    def status_reason(self) -> str:
+        """Explain the confirmed status (for the VTherm event log)."""
+        if self._bypass:
+            return "the bypass switch is on"
+        if self._status is InhibitionStatus.ACTIVE:
+            return f"active source: {', '.join(self.active_sources) or 'none'}"
+        if self._status is InhibitionStatus.UNKNOWN:
+            unavailable = [s.entity_id for s in self.source_states if s.contribution == SOURCE_UNAVAILABLE]
+            return f"unavailable source: {', '.join(unavailable) or 'none'}"
+        return "no active source"
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

@@ -37,7 +37,7 @@ from .harness import (
 
 
 async def test_over_switch_tpi(
-    hass: HomeAssistant, underlyings: Underlyings, facade_calls: FacadeCalls, advance
+    hass: HomeAssistant, underlyings: Underlyings, facade_calls: FacadeCalls, advance, caplog
 ) -> None:
     """One set and one switch stop on entry, no TPI cycle while inhibited, one unset and TPI resumes on exit."""
     await setup_entry(hass, switch_vt_entry())
@@ -74,6 +74,9 @@ async def test_over_switch_tpi(
     assert attrs["command_gate"] == "CLOSED"
     assert attrs["entry_stop_completed"] is True
     assert facade_calls.of(SWITCH_VT_ID) == [("unset", None), ("set", True)]
+    # The reason is in the event log, under the VTherm's name (as the core writes its own events)
+    assert f"{vt.name} - ---------------------> NEW EVENT: Inhibition requested by" in caplog.text
+    assert f"(active source: {SOURCE})" in caplog.text
 
     # Several cycles: no TPI cycle, no command (even a forced control cycle)
     underlyings.reset()
